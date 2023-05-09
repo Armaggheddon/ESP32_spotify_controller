@@ -1,0 +1,88 @@
+esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
+{
+    esp_err_t err;
+    do {
+        if (client->process_again) {
+            esp_http_client_prepare(client);
+        }
+        switch (client->state) {
+        /* In case of blocking esp_http_client_perform(), the following states will fall through one after the after;
+           in case of non-blocking esp_http_client_perform(), if there is an error condition, like EINPROGRESS or EAGAIN,
+           then the esp_http_client_perform() API will return ESP_ERR_HTTP_EAGAIN error. The user may call
+           esp_http_client_perform API again, and for this reason, we maintain the states */
+            case HTTP_STATE_INIT:
+                if ((err = esp_http_client_connect(client)) != ESP_OK) {
+                    if (client->is_async && err == ESP_ERR_HTTP_CONNECTING) {
+                        return ESP_ERR_HTTP_EAGAIN;
+                    }
+                    return err;
+                }
+                /* falls through */
+            case HTTP_STATE_CONNECTED:
+                if ((err = esp_http_client_request_send(client, client->post_len)) != ESP_OK) {
+                    if (client->is_async && errno == EAGAIN) {
+                        return ESP_ERR_HTTP_EAGAIN;
+                    }
+                    return err;
+                }
+                /* falls through */
+            case HTTP_STATE_REQ_COMPLETE_HEADER:
+                if ((err = esp_http_client_send_post_data(client)) != ESP_OK) {
+                    if (client->is_async && errno == EAGAIN) {
+                        return ESP_ERR_HTTP_EAGAIN;
+                    }
+                    client->state = HTTP_STATE_CONNECTED;
+                    return err;
+                }
+                /* falls through */
+            case HTTP_STATE_REQ_COMPLETE_DATA:
+                if (esp_http_client_fetch_headers(client) < 0) {
+                    if (client->is_async && errno == EAGAIN) {
+                        return ESP_ERR_HTTP_EAGAIN;
+                    }
+                    client->state = HTTP_STATE_CONNECTED;
+                    return ESP_ERR_HTTP_FETCH_HEADER;
+                }
+                /* falls through */
+            case HTTP_STATE_RES_COMPLETE_HEADER:
+                if ((err = esp_http_check_response(client)) != ESP_OK) {
+                    ESP_LOGE(TAG, "Error response");
+                    client->state = HTTP_STATE_CONNECTED;
+                    return err;
+                }
+                while (client->response->is_chunked && !client->is_chunk_complete) {
+                    if (esp_http_client_get_data(client) <= 0) {
+                        if (client->is_async && errno == EAGAIN) {
+                            return ESP_ERR_HTTP_EAGAIN;
+                        }
+                        ESP_LOGD(TAG, "Read finish or server requests close");
+                        break;
+                    }
+                }
+                while (client->response->data_process < client->response->content_length) {
+                    if (esp_http_client_get_data(client) <= 0) {
+                        if (client->is_async && errno == EAGAIN) {
+                            return ESP_ERR_HTTP_EAGAIN;
+                        }
+                        ESP_LOGD(TAG, "Read finish or server requests close");
+                        break;
+                    }
+                }
+                http_dispatch_event(client, HTTP_EVENT_ON_FINISH, NULL, 0);
+
+                if (!http_should_keep_alive(client->parser)) {
+                    ESP_LOGD(TAG, "Close connection");
+                    esp_http_client_close(client);
+                } else {
+                    if (client->state > HTTP_STATE_CONNECTED) {
+                        client->state = HTTP_STATE_CONNECTED;
+                        client->first_line_prepared = false;
+                    }
+                }
+                break;
+                default:
+                break;
+        }
+    } while (client->process_again);
+    return ESP_OK;
+}
