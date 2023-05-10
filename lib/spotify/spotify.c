@@ -499,13 +499,119 @@ void spotify_action_decrease_playback_volume(uint8_t volume_decrease_amount){
     xTaskCreate( task_set_playback_volume, "set_playback_volume", 4096, volume_mem, 4, NULL);
 }
 
+void task_set_repeat_mode(void *pvParam){
 
-void spotify_action_set_repeat_mode(uint8_t repeat_mode){
-    ESP_LOGE(SPOTIFY_TAG, "TODO");
+    uint8_t repeat_mode_id = *((uint8_t*) pvParam);
+
+    esp_http_client_config_t config = {
+        .url = SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_SET_REPEAT_MODE_ENDPOINT),
+        .method = HTTP_METHOD_PUT,
+        //.event_handler = my_http_event_handler,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size_tx = 1024,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    esp_http_client_set_header(client, SPOTIFY_AUTH_KEY, _spotify_bearer_auth);
+
+    char *url_request = calloc(1, 512);
+    sprintf(url_request, "%s?state=%s",
+        SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_SET_REPEAT_MODE_ENDPOINT),
+        SPOTIFY_GET_REPEAT_MODE_NAME(repeat_mode_id)
+    );
+    esp_http_client_set_url(client, url_request);
+
+    if(esp_http_client_perform(client) == ESP_OK){
+        //OK
+    }else{
+        ESP_LOGE(SPOTIFY_TAG, "Failed asking for set repeat mode");
+    }
+
+    free(url_request);
+    free(pvParam);
+
+    esp_http_client_cleanup(client);
+
+    vTaskDelete(NULL);
 }
 
-void spotify_action_toggle_playback_shuffle(void){
-    ESP_LOGE(SPOTIFY_TAG, "TODO");
+void spotify_action_set_repeat_mode(uint8_t repeat_mode){
+    
+    uint8_t *repeat_mode_mem = calloc(1, sizeof(uint8_t));
+    if(repeat_mode == SPOTIFY_SET_REPEAT_MODE_AUTO){
+
+        // find what is the id on the current repeat mode and set it to the next one
+        if(strcmp( _spotify_info->repeat_state, "off") == 0) *repeat_mode_mem = 1;              //mode off corresponds to id 0, so set it to the next that is mode 1 = context
+        else if(strcmp(_spotify_info->repeat_state, "context") == 0) *repeat_mode_mem = 2;
+        else if(strcmp(_spotify_info->repeat_state, "track") == 0) *repeat_mode_mem = 0;
+        else *repeat_mode_mem = 0;
+
+    }else{
+        *(repeat_mode_mem) = repeat_mode;
+    }
+
+    xTaskCreate(
+        task_set_repeat_mode,
+        "set_repeat_mode",
+        4096,
+        repeat_mode_mem,
+        4,
+        NULL
+    );
+}
+
+void task_toggle_shuffle(void *pvParam){
+    
+    uint8_t shuffle_state = *((uint8_t*)pvParam);
+
+    esp_http_client_config_t config = {
+        .url = SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_TOGGLE_PLAYBACK_SHUFFLE_ENDPOINT),
+        .method = HTTP_METHOD_PUT,
+        //.event_handler = my_http_event_handler,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size_tx = 1024,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    char *url_request = calloc(1, 512);
+    sprintf(url_request, "%s?state=%s", SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_TOGGLE_PLAYBACK_SHUFFLE_ENDPOINT), (shuffle_state) ? "true" : "false");
+    esp_http_client_set_url(client, url_request);
+
+    esp_http_client_set_header(client, SPOTIFY_AUTH_KEY, _spotify_bearer_auth);
+
+    if(esp_http_client_perform(client) == ESP_OK){
+        //OK
+    }else{
+        ESP_LOGE(SPOTIFY_TAG, "Failed asking shuffle toggle");
+    }
+
+    free(url_request);
+    free(pvParam);
+    esp_http_client_cleanup(client);
+    vTaskDelete(NULL);
+}
+
+void spotify_action_toggle_playback_shuffle(uint8_t shuffle){
+
+    uint8_t *shuffle_state_mem = calloc(1, sizeof(uint8_t));
+    if(shuffle == SPOTIFY_TOGGLE_SHUFFLE_AUTO){
+        *(shuffle_state_mem) = !(_spotify_info->shuffle_state);
+    }else{
+        *(shuffle_state_mem) = shuffle;
+    }
+
+    xTaskCreate(
+        task_toggle_shuffle,
+        "toggle_shuffle", 
+        4096,
+        shuffle_state_mem,
+        4, 
+        NULL
+    );
 }
 
 

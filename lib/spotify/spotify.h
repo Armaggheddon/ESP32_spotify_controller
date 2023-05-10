@@ -5,45 +5,53 @@
 
 
 
-#define SPOTIFY_REQUEST_TOKEN_ENDPOINT  "https://accounts.spotify.com/api/token"
-#define SPOTIFY_REQUEST_REFRESH_TOKEN_POST_TEMPLATE    "grant_type=refresh_token&refresh_token=%s"
+#define SPOTIFY_REQUEST_TOKEN_ENDPOINT                              "https://accounts.spotify.com/api/token"
+#define SPOTIFY_REQUEST_REFRESH_TOKEN_POST_TEMPLATE                 "grant_type=refresh_token&refresh_token=%s"
 
-#define SPOTIFY_TOKEN_LEN 300                               // Can be 219 (in theory XD)
-#define SPOTIFY_TOKEN_REFRESH_TIMER_INTERVAL_SEC    3600    // Maximum amount of time a token is valid
-#define SPOTIFY_TOKEN_REFRESH_TIMER_OFFSET_SEC      100     // Offset applied to retrieve the new token before expiration
-#define SPOTIFY_TOKEN_REFRESH_TIMER_PERIOD_TICKS(TICK_PERIOD_MS) (SPOTIFY_TOKEN_REFRESH_TIMER_INTERVAL_SEC - SPOTIFY_TOKEN_REFRESH_TIMER_OFFSET_SEC) *1000 / TICK_PERIOD_MS
+#define SPOTIFY_TOKEN_LEN                                           300     // Can be 219 (in theory XD)
+#define SPOTIFY_TOKEN_REFRESH_TIMER_INTERVAL_SEC                    3600    // Maximum amount of time a token is valid
+#define SPOTIFY_TOKEN_REFRESH_TIMER_OFFSET_SEC                      100     // Offset applied to retrieve the new token before expiration
+#define SPOTIFY_TOKEN_REFRESH_TIMER_PERIOD_TICKS(TICK_PERIOD_MS)    (SPOTIFY_TOKEN_REFRESH_TIMER_INTERVAL_SEC - SPOTIFY_TOKEN_REFRESH_TIMER_OFFSET_SEC) *1000 / TICK_PERIOD_MS
 
 
 /************************************ SPOTIFY ENDPOINTS TO MAKE REQUESTS *************************/
-#define SPOTIFY_API                                 "https://api.spotify.com/v1/me"
+#define SPOTIFY_API                                     "https://api.spotify.com/v1/me"
 
-#define SPOTIFY_PLAYER_REFERENCE                    "/player"
+#define SPOTIFY_PLAYER_REFERENCE                        "/player"
 
-#define SPOTIFY_CURRENTLY_PLAYING_ENDPOINT          "/currently-playing"
-#define SPOTIFY_AVAILABLE_DEVICES_ENDPOINT          "/devices"
-#define SPOTIFY_PLAY_ENDPOINT                       "/play"
-#define SPOTIFY_PAUSE_ENDPOINT                      "/pause"
-#define SPOTIFY_SKIP_TO_NEXT_ENDPOINT               "/next"
-#define SPOTIFY_SKIP_TO_PREVIOUS_ENDPOINT           "/previous"
-#define SPOTIFY_SET_PLAYBACK_VOLUME_ENDPOINT        "/volume"
+#define SPOTIFY_CURRENTLY_PLAYING_ENDPOINT              "/currently-playing"
+#define SPOTIFY_AVAILABLE_DEVICES_ENDPOINT              "/devices"
+#define SPOTIFY_PLAY_ENDPOINT                           "/play"
+#define SPOTIFY_PAUSE_ENDPOINT                          "/pause"
+#define SPOTIFY_SKIP_TO_NEXT_ENDPOINT                   "/next"
+#define SPOTIFY_SKIP_TO_PREVIOUS_ENDPOINT               "/previous"
+#define SPOTIFY_SET_PLAYBACK_VOLUME_ENDPOINT            "/volume"
+#define SPOTIFY_TOGGLE_PLAYBACK_SHUFFLE_ENDPOINT        "/shuffle"
+#define SPOTIFY_SET_REPEAT_MODE_ENDPOINT                "/repeat"
 
-#define SPOTIFY_TRACKS_REFERENCE                    "/tracks"
+#define SPOTIFY_TRACKS_REFERENCE                        "/tracks"
 
-#define SPOTIFY_GET_PLAY_PAUSE_API_URL(IS_PLAYING)  ((IS_PLAYING) ? SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_PAUSE_ENDPOINT) : SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_PLAY_ENDPOINT))
-#define SPOTIFY_GET_API_URL(...)                    SPOTIFY_GET_API_URL_BASE(__VA_ARGS__)
-#define SPOTIFY_GET_API_URL_BASE(x, ...)            SPOTIFY_API x __VA_ARGS__
-#define SPOTIFY_MAX_API_LEN                         7000
+#define SPOTIFY_GET_PLAY_PAUSE_API_URL(IS_PLAYING)      ((IS_PLAYING) ? SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_PAUSE_ENDPOINT) : SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_PLAY_ENDPOINT))
+#define SPOTIFY_GET_API_URL(...)                        SPOTIFY_GET_API_URL_BASE(__VA_ARGS__)
+#define SPOTIFY_GET_API_URL_BASE(x, ...)                SPOTIFY_API x __VA_ARGS__
+#define SPOTIFY_MAX_API_LEN                             7000
 
-#define SPOTIFY_AUTH_KEY                            "Authorization"
-#define SPOTIFY_AUTH_FIELD_BEARER_TEMPLATE          "Bearer %s"
-#define SPOTIFY_AUTH_FIELD_BASIC_TEMPLATE           "Basic %s"
+#define SPOTIFY_AUTH_KEY                                "Authorization"
+#define SPOTIFY_AUTH_FIELD_BEARER_TEMPLATE              "Bearer %s"
+#define SPOTIFY_AUTH_FIELD_BASIC_TEMPLATE               "Basic %s"
 
-#define TOKEN_QUEUE_LEN         1
-#define TOKEN_QUEUE_ITEM_SIZE   SPOTIFY_TOKEN_LEN 
+#define TOKEN_QUEUE_LEN                                 1
+#define TOKEN_QUEUE_ITEM_SIZE                           SPOTIFY_TOKEN_LEN 
 
-#define SPOTIFY_DEFAULT_UPDATE_DELAY_MS         200
+#define SPOTIFY_DEFAULT_UPDATE_DELAY_MS                 200
 
 #define SPOTIFY_TAG "SPOTIFY"
+
+#define SPOTIFY_GET_CORRECT_INFO_TYPE(config)           (config.info_type == SPOTIFY_INFO) ? _spotify_info : ((config.info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base : NULL)  
+#define SPOTIFY_GET_REPEAT_MODE_NAME(repeat_mode_id)    (repeat_mode_id == 0) ? "off" : ((repeat_mode_id == 1) ? "context" : ((repeat_mode_id == 2) ? "track" : NULL)) 
+
+#define SPOTIFY_TOGGLE_SHUFFLE_AUTO                     99
+#define SPOTIFY_SET_REPEAT_MODE_AUTO                    99
 
 
 /******************* BEGIN: DATA STRUCTURES TO HOLD RESPONSE FROM PLAYER ENDPOINT ****************/
@@ -341,11 +349,11 @@ void spotify_action_increase_playback_volume(uint8_t volume_increase_amount);
 void spotify_action_decrease_playback_volume(uint8_t volume_decrease_amount);
 
 typedef enum{
-    SPOTIFY_REPEAT_MODE_TRACK = 0,
+    SPOTIFY_REPEAT_MODE_OFF = 0,
     SPOTIFY_REPEAT_MODE_CONTEXT = 1,
-    SPOTIFY_REPEAT_MODE_OFF = 2,
+    SPOTIFY_REPEAT_MODE_TRACK = 2,
 }SpotifyRepeatModeEnum_t;
-static const char *spotify_repeat_mode_name[3] = {"track", "context", "off"};
+// static const char *spotify_repeat_mode_name[3] = {"track", "context", "off"};
 
 /**
  * Set the repeat mode for the user's playback. Options are
@@ -361,6 +369,6 @@ void spotify_action_set_repeat_mode(uint8_t repeat_mode);
  * Toggle shuffle on or off for user's playback. If the value
  * is previously off it will be turned on and viceversa.
 */
-void spotify_action_toggle_playback_shuffle(void);
+void spotify_action_toggle_playback_shuffle(uint8_t shuffle);
 
 #endif // SPOTIFY_H

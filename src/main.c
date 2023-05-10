@@ -361,12 +361,12 @@ void task_buttons_handler(void *pvParams){
                 }
                 case BUTTON_SHUFFLE_ID:{
                     ESP_LOGI(TAG, "\tSHUFFLE BUTTON PRESSED");
-                    spotify_action_toggle_playback_shuffle();
+                    spotify_action_toggle_playback_shuffle(SPOTIFY_TOGGLE_SHUFFLE_AUTO);
                     break;
                 }
                 case BUTTON_REPEAT_MODE_ID:{
                     ESP_LOGI(TAG, "\tREPEAT MODE PRESSED");
-                    // spotify_action_set_repeat_mode();
+                    spotify_action_set_repeat_mode(SPOTIFY_SET_REPEAT_MODE_AUTO);
                     break;
                 }
                 case BUTTON_ADD_TO_FAVOURITE_ID:{
