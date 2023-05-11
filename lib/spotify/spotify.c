@@ -1108,7 +1108,7 @@ int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .user_data = img_buff,
-        .buffer_size = 2048,
+        .buffer_size = 1024,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
