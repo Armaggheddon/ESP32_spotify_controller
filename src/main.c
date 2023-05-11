@@ -366,7 +366,7 @@ void task_buttons_handler(void *pvParams){
                 }
                 case BUTTON_REPEAT_MODE_ID:{
                     ESP_LOGI(TAG, "\tREPEAT MODE PRESSED");
-                    spotify_action_set_repeat_mode(SPOTIFY_SET_REPEAT_MODE_AUTO);
+                    spotify_action_set_repeat_mode(SPOTIFY_REPEAT_MODE_AUTO);
                     break;
                 }
                 case BUTTON_ADD_TO_FAVOURITE_ID:{
@@ -388,13 +388,22 @@ void my_pp_change(uint8_t is_playing){
     ESP_LOGI(TAG, "PLAYBACK CHANGED TO %s", (is_playing)? "PLAY": "PAUSE");
 }
 
+char img_buff[4096];
+
 void my_song_change(SpotifyInfo_t *info){
-    ESP_LOGI(TAG, "SONG CHANGED TO %s, album art: %s [h:%d, w:%d]", 
+    ESP_LOGI(TAG, "SONG CHANGED TO %s, album art(smallest): %s [h:%d, w:%d]", 
         info->item->name, 
         info->item->album->images[info->item->album->images_count-1]->url,
         info->item->album->images[info->item->album->images_count-1]->height,
         info->item->album->images[info->item->album->images_count-1]->width
     );
+    int img_size = spotify_get_album_cover_art_latest(SPOTIFY_ALBUM_ART_SIZE_SMALLEST, img_buff, 4096);
+    if(img_size > 0){
+        ESP_LOGI(TAG, "SUCCESS  downloading image [%d bytes]!!", img_size);
+        ESP_LOG_BUFFER_HEX(TAG, img_buff, img_size);
+    }else if(img_size == -1){
+        ESP_LOGI(TAG, "ERROR downloading image!!");
+    }
 }
 
 void app_main()
@@ -511,6 +520,7 @@ void app_main()
     spotify_set_update_delay(200);
     spotify_start();
 
+
     int min_total, min_elapsed, seconds_total, seconds_elapsed;
 
     while(1){
@@ -531,6 +541,7 @@ void app_main()
 
         if(_info->item->name == NULL) ESP_LOGI(TAG, "SONG_NAME IS NULL");
         else ESP_LOGI(TAG, "\t\t%s %d:%02d/%d:%02d volume: %u%%[stack available %lu]", _info->item->name, min_elapsed, seconds_elapsed%60, min_total, seconds_total%60, _info->device->volume_percent, esp_get_free_heap_size());
+
 
         // ESP_LOGI(TAG, "smallest image size-> h=%d, w=%d", 
         //     _info->item->album->images[_info->item->album->images_count-1]->height,

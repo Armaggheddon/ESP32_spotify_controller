@@ -17,6 +17,7 @@
 SpotifyInfoBase_t *_spotify_info_base = NULL;
 SpotifyInfo_t *_spotify_info = NULL;
 SpotifyConfig_t _spotify_config;
+SpotifyAvailableDevices_t *_spotify_available_devices = NULL;
 
 
 TimerHandle_t xRefreshTokenTimer;
@@ -46,6 +47,7 @@ uint16_t api_response_pos;
 
 SpotifyInfoBase_t* spotify_get_last_info_base(){ return _spotify_info_base;}
 SpotifyInfo_t* spotify_get_last_info(){ return _spotify_info;}
+
 
 
 void IRAM_ATTR token_refresh_timer_cb(TimerHandle_t xTimer){
@@ -221,7 +223,6 @@ void task_skip_next(void *pvParam){
     vTaskDelete(NULL);
 } 
 
-
 void spotify_action_skip_next(void){
 
     // if(xSemaphoreTake(xSkipNextSemaphore, 0) == pdFALSE){
@@ -266,7 +267,6 @@ void task_play_pause(void *pvParam){
     vTaskDelete(NULL);
 }
 
-
 void spotify_action_play_pause(void){
     xTaskCreate(task_play_pause, "play_pause", 4096, &(_spotify_info->is_playing), 4, NULL);
 }
@@ -307,7 +307,6 @@ void task_skip_previous(void *pvParam){
     vTaskDelete(NULL);
 }
 
-
 void spotify_action_skip_previous(void){
     xTaskCreate(task_skip_previous, "skip_previous", 4096, NULL, 4, NULL);
 }
@@ -337,19 +336,7 @@ void task_add_currently_playing_to_favourite(void *pvParam){
     cJSON *root = cJSON_CreateObject();
     cJSON *ids_array = cJSON_AddArrayToObject(root, "ids");
 
-    char *track_id = NULL;
-    switch(_spotify_config.info_type){
-        case SPOTIFY_INFO:{
-            track_id = _spotify_info->item->id;
-            break;
-        }
-        case SPOTIFY_INFO_BASE:{
-            track_id = _spotify_info_base->song_id;
-            break;
-        }
-        default:
-            break;
-    }
+    char *track_id = SPOTIFY_GET_TRACK_ID(_spotify_config.info_type);
 
     cJSON_AddItemToArray(ids_array, cJSON_CreateString(track_id));
     char *json_body = cJSON_Print(root);
@@ -374,23 +361,9 @@ void task_add_currently_playing_to_favourite(void *pvParam){
     vTaskDelete(NULL);
 }
 
-
 void spotify_add_currently_playing_to_favourite(void){
 
-    char *item_id = NULL;
-    switch (_spotify_config.info_type){
-        case SPOTIFY_INFO:{
-            item_id = _spotify_info->item->id;
-            break;
-        }
-        
-        case SPOTIFY_INFO_BASE:{
-            item_id = _spotify_info_base->song_id;
-            break;
-        }
-        default:
-            break;
-    }
+    char *item_id = SPOTIFY_GET_TRACK_ID(_spotify_config.info_type);
 
     xTaskCreate(task_add_currently_playing_to_favourite, "add_to_favourite", 4096, item_id, 4, NULL);
 }
@@ -433,71 +406,38 @@ void task_set_playback_volume(void *pvParam){
     vTaskDelete(NULL);
 }
 
-
 void spotify_action_set_playback_volume(uint8_t volume_percent){
-    uint8_t new_volume_value = volume_percent;
-    if(volume_percent > 100) new_volume_value = 100;
+    uint8_t *volume_val_mem = calloc(1, sizeof(uint8_t));
+    if(volume_percent > 100) *(volume_val_mem) = 100;
+    else *(volume_val_mem) = volume_percent;
 
-    uint8_t *volume_mem = calloc(1, sizeof(uint8_t));
-    memcpy(volume_mem, &new_volume_value, 1);
-
-    xTaskCreate(task_set_playback_volume, "set_playback_volume", 4096, volume_mem, 4, NULL);
+    xTaskCreate(task_set_playback_volume, "set_playback_volume", 4096, volume_val_mem, 4, NULL);
 }
-
 
 void spotify_action_increase_playback_volume(uint8_t volume_increase_amount){
 
     //get current volume value
-    uint8_t current_volume_val = 0;
-    switch(_spotify_config.info_type){
-        case SPOTIFY_INFO:{
-            current_volume_val = _spotify_info->device->volume_percent;
-            break;
-        }
-        case SPOTIFY_INFO_BASE:{
-            //CURRENTLY NOT SUPPORTED WITH BASE INFO, TODO: ADD!!
-            break;
-        }
-        default:
-            break;
-    }
+    uint8_t *volume_val_mem = calloc(1, sizeof(uint8_t));
+    
+    *(volume_val_mem) = SPOTIFY_GET_DEVICE_VOLUME(_spotify_config.info_type);
 
-    uint8_t new_volume_value = current_volume_val;
-    if(new_volume_value + volume_increase_amount <= 100) new_volume_value += volume_increase_amount;
-    else new_volume_value = 100;
+    if(*volume_val_mem - volume_increase_amount >= 0) *(volume_val_mem) += volume_increase_amount;
+    else *(volume_val_mem) = 0;
 
-    uint8_t *volume_mem = calloc(1, sizeof(uint8_t));
-    memcpy(volume_mem, &new_volume_value, 1);
-
-    xTaskCreate( task_set_playback_volume, "set_playback_volume", 4096, volume_mem, 4, NULL);
+    xTaskCreate( task_set_playback_volume, "set_playback_volume", 4096, volume_val_mem, 4, NULL);
 }
-
 
 void spotify_action_decrease_playback_volume(uint8_t volume_decrease_amount){
-    //get current volume value
-    uint8_t current_volume_val = 0;
-    switch(_spotify_config.info_type){
-        case SPOTIFY_INFO:{
-            current_volume_val = _spotify_info->device->volume_percent;
-            break;
-        }
-        case SPOTIFY_INFO_BASE:{
-            //CURRENTLY NOT SUPPORTED WITH BASE INFO, TODO: ADD!!
-            break;
-        }
-        default:
-            break;
-    }
+    uint8_t *volume_val_mem = calloc(1, sizeof(uint8_t));
+    
+    *(volume_val_mem) = SPOTIFY_GET_DEVICE_VOLUME(_spotify_config.info_type);
 
-    uint8_t new_volume_value = current_volume_val;
-    if(new_volume_value - volume_decrease_amount >= 0) new_volume_value -= volume_decrease_amount;
-    else new_volume_value = 0;
+    if(*volume_val_mem - volume_decrease_amount >= 0) *(volume_val_mem) -= volume_decrease_amount;
+    else *(volume_val_mem) = 0;
 
-    uint8_t *volume_mem = calloc(1, sizeof(uint8_t));
-    memcpy(volume_mem, &new_volume_value, 1);
-
-    xTaskCreate( task_set_playback_volume, "set_playback_volume", 4096, volume_mem, 4, NULL);
+    xTaskCreate( task_set_playback_volume, "set_playback_volume", 4096, volume_val_mem, 4, NULL);
 }
+
 
 void task_set_repeat_mode(void *pvParam){
 
@@ -540,16 +480,18 @@ void task_set_repeat_mode(void *pvParam){
 void spotify_action_set_repeat_mode(uint8_t repeat_mode){
     
     uint8_t *repeat_mode_mem = calloc(1, sizeof(uint8_t));
-    if(repeat_mode == SPOTIFY_SET_REPEAT_MODE_AUTO){
+    if(repeat_mode == SPOTIFY_REPEAT_MODE_AUTO){
+
+        char *_spotify_repeat_state = SPOTIFY_GET_REPEAT_STATE(_spotify_config.info_type);
 
         // find what is the id on the current repeat mode and set it to the next one
-        if(strcmp( _spotify_info->repeat_state, "off") == 0) *repeat_mode_mem = 1;              //mode off corresponds to id 0, so set it to the next that is mode 1 = context
-        else if(strcmp(_spotify_info->repeat_state, "context") == 0) *repeat_mode_mem = 2;
-        else if(strcmp(_spotify_info->repeat_state, "track") == 0) *repeat_mode_mem = 0;
+        if(strcmp(_spotify_repeat_state, "off") == 0) *repeat_mode_mem = 1;              //mode off corresponds to id 0, so set it to the next that is mode 1 = context
+        else if(strcmp(_spotify_repeat_state, "context") == 0) *repeat_mode_mem = 2;
+        else if(strcmp(_spotify_repeat_state, "track") == 0) *repeat_mode_mem = 0;
         else *repeat_mode_mem = 0;
 
-    }else{
-        *(repeat_mode_mem) = repeat_mode;
+    }else {
+        *(repeat_mode_mem) = (repeat_mode <= 2) ? repeat_mode : 0;
     }
 
     xTaskCreate(
@@ -561,6 +503,7 @@ void spotify_action_set_repeat_mode(uint8_t repeat_mode){
         NULL
     );
 }
+
 
 void task_toggle_shuffle(void *pvParam){
     
@@ -599,14 +542,14 @@ void spotify_action_toggle_playback_shuffle(uint8_t shuffle){
 
     uint8_t *shuffle_state_mem = calloc(1, sizeof(uint8_t));
     if(shuffle == SPOTIFY_TOGGLE_SHUFFLE_AUTO){
-        *(shuffle_state_mem) = !(_spotify_info->shuffle_state);
+        *(shuffle_state_mem) = !(SPOTIFY_GET_SHUFFLE_STATE(_spotify_config.info_type));
     }else{
-        *(shuffle_state_mem) = shuffle;
+        *(shuffle_state_mem) = (shuffle <= 1) ? shuffle : 0;
     }
 
     xTaskCreate(
         task_toggle_shuffle,
-        "toggle_shuffle", 
+        "toggle_shuffle",
         4096,
         shuffle_state_mem,
         4, 
@@ -854,17 +797,24 @@ void parse_playback_state_response_base(char *response){
     cJSON *device = cJSON_GetObjectItem(root, "device");
     cJSON *progress_ms = cJSON_GetObjectItem(root, "progress_ms");
     cJSON *is_playing = cJSON_GetObjectItem(root, "is_playing");
+    cJSON *shuffle_state = cJSON_GetObjectItem(root, "shuffle_state");
+    cJSON *repeat_state = cJSON_GetObjectItem(root, "repeat_state");
 
     if(progress_ms != NULL) _spotify_info_base->progress_ms = progress_ms->valueint;
     if(is_playing != NULL) _spotify_info_base->is_playing = cJSON_IsTrue(is_playing) ? 1 : 0;
+    if(shuffle_state != NULL) _spotify_info_base->shuffle_state = cJSON_IsTrue(shuffle_state) ? 1 : 0;
+    if(repeat_state != NULL) allocate_string(&(_spotify_info_base->repeat_state), repeat_state->valuestring);
+
 
     if(item != NULL){
         cJSON *tmp_song_id = cJSON_GetObjectItem(item, "id");
-
         if(tmp_song_id != NULL){
             if(_spotify_info_base->song_id != NULL){
                 if(strcmp(_spotify_info_base->song_id, tmp_song_id->valuestring) == 0){
-                    //track being played is the same, no need to update all the data
+                    if(device != NULL){
+                        cJSON *_tmp_volume_percent = cJSON_GetObjectItem(device, "volume_percent");
+                        if(_tmp_volume_percent != NULL) _spotify_info_base->volume_percent = _tmp_volume_percent->valueint;
+                    }
                     cJSON_Delete(root);
                     return;
                 }
@@ -1036,8 +986,180 @@ void update_playback_state(void *pvParam){
         
         vTaskDelay( _spotify_config.update_delay_ms / portTICK_PERIOD_MS);
     }
+}
 
-    //free(auth_value);
+
+SpotifyAvailableDevices_t* spotify_get_available_devices(void){
+
+    esp_http_client_config_t config = {
+        .url = SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_AVAILABLE_DEVICES_ENDPOINT),
+        .method = HTTP_METHOD_GET,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .crt_bundle_attach = esp_crt_bundle_attach
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    esp_http_client_set_header(client, SPOTIFY_AUTH_KEY, _spotify_bearer_auth);
+
+    if(esp_http_client_perform(client) == ESP_OK){
+
+        int response_len = esp_http_client_get_content_length(client);
+        char *response = calloc(1, response_len);
+        if(response == NULL) {
+            ESP_LOGE(SPOTIFY_TAG, "Failed allocating memory for available devices response");
+            esp_http_client_cleanup(client);
+            return NULL;
+        }
+
+        esp_http_client_read_response(client, response, response_len);
+
+        cJSON *root = cJSON_Parse(response);
+
+        if(root == NULL) {
+            esp_http_client_cleanup(client);
+            return NULL;
+        }
+
+        cJSON *devices = cJSON_GetObjectItem(root, "devices");
+        if(devices != NULL){
+
+            int devices_count = cJSON_GetArraySize(devices);
+            if(_spotify_available_devices->available_devices_count != devices_count){
+
+                if(_spotify_available_devices->available_devices != NULL){
+
+                    for(uint8_t i = 0; i<_spotify_available_devices->available_devices_count; i++){
+                        free(_spotify_available_devices->available_devices[i]->id);
+                        free(_spotify_available_devices->available_devices[i]->name);
+                        free(_spotify_available_devices->available_devices[i]->type);
+                        free(_spotify_available_devices->available_devices[i]);
+                    }
+                    free(_spotify_available_devices->available_devices);
+                }
+
+                _spotify_available_devices->available_devices = calloc(1, sizeof(SpotifyDevice_t*));
+                for(uint8_t i = 0; i<devices_count; i++){
+                    _spotify_available_devices->available_devices[i] = calloc(1, sizeof(SpotifyDevice_t));
+                }
+
+                _spotify_available_devices->available_devices_count = devices_count;
+            }
+
+            for(uint8_t i = 0; i<devices_count; i++){
+                cJSON *device_item = cJSON_GetArrayItem(devices, i);
+                cJSON *id = cJSON_GetObjectItem(device_item, "id");
+                cJSON *is_active = cJSON_GetObjectItem(device_item, "is_active");
+                cJSON *is_private_session = cJSON_GetObjectItem(device_item, "is_private_session");
+                cJSON *is_restricted = cJSON_GetObjectItem(device_item, "is_restricted");
+                cJSON *name = cJSON_GetObjectItem(device_item, "name");
+                cJSON *type = cJSON_GetObjectItem(device_item, "type");
+                cJSON *volume_percent = cJSON_GetObjectItem(device_item, "volume_percent");
+
+                if(id != NULL) allocate_string(&(_spotify_available_devices->available_devices[i]->id), id->valuestring);
+                if(is_active != NULL) _spotify_available_devices->available_devices[i]->is_active = cJSON_IsTrue(is_active) ? 1 : 0;
+                if(is_private_session != NULL) _spotify_available_devices->available_devices[i]->is_private_session = cJSON_IsTrue(is_private_session) ? 1 : 0;
+                if(is_restricted != NULL) _spotify_available_devices->available_devices[i]->is_restricted = cJSON_IsTrue(is_restricted) ? 1 : 0;
+                if(name != NULL) allocate_string(&(_spotify_available_devices->available_devices[i]->name), name->valuestring);
+                if(type != NULL) allocate_string(&(_spotify_available_devices->available_devices[i]->type), type->valuestring);
+                if(volume_percent != NULL) _spotify_available_devices->available_devices[i]->volume_percent = volume_percent->valueint;
+            }
+        }
+        free(response);
+        cJSON_Delete(root);
+    }
+
+    esp_http_client_cleanup(client);
+
+    return _spotify_available_devices;
+}
+
+
+uint16_t img_offset = 0;
+static esp_err_t image_evt_handler(esp_http_client_event_t *evt){
+    switch(evt->event_id){
+        case HTTP_EVENT_ON_DATA:{
+            ESP_LOGI(SPOTIFY_TAG, "Received %d bytes of image", evt->data_len);
+            memcpy(evt->user_data + img_offset, evt->data, evt->data_len);
+            img_offset += evt->data_len;
+            break;
+        }
+        case HTTP_EVENT_ON_FINISH:{
+            // (char*)(evt->user_data)[img_offset] = '\0';
+            img_offset = 0;
+            break;
+        }
+        case HTTP_EVENT_DISCONNECTED:{
+            img_offset = 0;
+            break;
+        }
+        default:
+            break;
+    }
+    return ESP_OK;
+}
+
+int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff_size){
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = image_evt_handler,
+        .method = HTTP_METHOD_GET,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .user_data = img_buff,
+        .buffer_size = 2048,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    if(esp_http_client_perform(client) != ESP_OK) {esp_http_client_cleanup(client); return ESP_FAIL;}
+
+    int img_cl = esp_http_client_get_content_length(client);
+    if(img_cl > img_buff_size){
+        ESP_LOGE(SPOTIFY_TAG, "IMAGE BUFFER NOT BIG ENOUGHT FOR IMAGE, MUST BE AT LEAST %d bytes", img_cl);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
+    img_buff[img_cl] = '\0';
+    
+    ESP_LOGI(SPOTIFY_TAG, "Image size received is %d bytes", img_cl);
+    esp_http_client_cleanup(client);
+    return img_cl;
+}
+
+int spotify_get_album_cover_art_latest(uint16_t size, char *img_buff, int img_buff_size){
+
+    if(size > SPOTIFY_ALBUM_ART_SIZE_LARGEST) return ESP_FAIL;
+
+    char *img_url = NULL;
+    
+    SpotifyImage_t **_tmp_images = SPOTIFY_GET_IMAGES_PTR(_spotify_config.info_type);
+    uint8_t _tmp_images_count = SPOTIFY_GET_IMAGES_COUNT(_spotify_config.info_type);
+
+    if(_tmp_images_count == 0 || _tmp_images == NULL) return ESP_FAIL;
+
+    //Images are retrieved as widest first so if is requested the largest image get the one
+    //at index 0, while if the smallest is asked get the one at the last index
+    if(size == SPOTIFY_ALBUM_ART_SIZE_SMALLEST){
+        img_url = _tmp_images[_tmp_images_count-1]->url;
+    }else if(size == SPOTIFY_ALBUM_ART_SIZE_LARGEST){
+        img_url = _tmp_images[0]->url;
+    }else{
+
+        for(uint8_t i = 1; i<_tmp_images_count-1; i++){
+            if(_tmp_images[i]->height == size){
+                //heigth and width are the same, all images are square
+                //if found the image, copy the url and quit the loop
+                img_url = _tmp_images[i]->url;
+            }
+        }
+    }
+
+    if(img_url == NULL) return ESP_FAIL;
+
+    return spotify_get_album_cover_art_from_url(img_url, img_buff, img_buff_size);
 }
 
 
@@ -1132,6 +1254,12 @@ esp_err_t spotify_start(void){
     }
 
     if(_spotify_config.update_delay_ms == 0) _spotify_config.update_delay_ms = SPOTIFY_DEFAULT_UPDATE_DELAY_MS;
+
+    _spotify_available_devices = calloc(1, sizeof(SpotifyAvailableDevices_t));
+    if(_spotify_available_devices == NULL){
+        ESP_LOGE(SPOTIFY_TAG, "Failed allocating memory for available devices");
+        return ESP_FAIL;
+    }
 
     xTokenQueue = xQueueCreate(TOKEN_QUEUE_LEN, TOKEN_QUEUE_ITEM_SIZE);
     xRefreshTokenSemaphore = xSemaphoreCreateBinary();

@@ -4,7 +4,6 @@
 #include <stdlib.h>
 
 
-
 #define SPOTIFY_REQUEST_TOKEN_ENDPOINT                              "https://accounts.spotify.com/api/token"
 #define SPOTIFY_REQUEST_REFRESH_TOKEN_POST_TEMPLATE                 "grant_type=refresh_token&refresh_token=%s"
 
@@ -47,11 +46,15 @@
 
 #define SPOTIFY_TAG "SPOTIFY"
 
-#define SPOTIFY_GET_CORRECT_INFO_TYPE(config)           (config.info_type == SPOTIFY_INFO) ? _spotify_info : ((config.info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base : NULL)  
-#define SPOTIFY_GET_REPEAT_MODE_NAME(repeat_mode_id)    (repeat_mode_id == 0) ? "off" : ((repeat_mode_id == 1) ? "context" : ((repeat_mode_id == 2) ? "track" : NULL)) 
+#define SPOTIFY_GET_REPEAT_STATE(info_type)             (info_type == SPOTIFY_INFO) ? _spotify_info->repeat_state : ((info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base->repeat_state : "off")  
+#define SPOTIFY_GET_SHUFFLE_STATE(info_type)            (info_type == SPOTIFY_INFO) ? _spotify_info->shuffle_state : ((info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base->shuffle_state : 0)  
+#define SPOTIFY_GET_DEVICE_VOLUME(info_type)            (info_type == SPOTIFY_INFO) ? _spotify_info->device->volume_percent : ((info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base->volume_percent : 50)  
+#define SPOTIFY_GET_TRACK_ID(info_type)                 (info_type == SPOTIFY_INFO) ? _spotify_info->item->id : ((info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base->song_id : NULL)
+#define SPOTIFY_GET_IMAGES_PTR(info_type)               (info_type == SPOTIFY_INFO) ? _spotify_info->item->album->images : ((info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base->images : NULL)
+#define SPOTIFY_GET_IMAGES_COUNT(info_type)             (info_type == SPOTIFY_INFO) ? _spotify_info->item->album->images_count : ((info_type == SPOTIFY_INFO_BASE) ? _spotify_info_base->images_count : 0)
 
-#define SPOTIFY_TOGGLE_SHUFFLE_AUTO                     99
-#define SPOTIFY_SET_REPEAT_MODE_AUTO                    99
+
+#define SPOTIFY_GET_REPEAT_MODE_NAME(repeat_mode_id)    (repeat_mode_id == SPOTIFY_REPEAT_MODE_OFF) ? "off" : ((repeat_mode_id == SPOTIFY_REPEAT_MODE_CONTEXT) ? "context" : ((repeat_mode_id == SPOTIFY_REPEAT_MODE_TRACK) ? "track" : "off")) 
 
 
 /******************* BEGIN: DATA STRUCTURES TO HOLD RESPONSE FROM PLAYER ENDPOINT ****************/
@@ -134,8 +137,11 @@ typedef struct {
 typedef struct{
     char *device_id;
     char *device_name;
+    uint8_t volume_percent;
     uint64_t progress_ms;
     uint8_t is_playing;
+    uint8_t shuffle_state;
+    char *repeat_state;
     char *album_name;
     SpotifyImage_t **images;
     uint8_t images_count;
@@ -267,6 +273,19 @@ int spotify_set_update_delay(uint32_t delay_ms);
  * Starts the execution of the tasks to get the latest playback state and to 
  * retrieve the token for the requests. Allocates the required memory based on the 
  * user choice of SpotifyInfoType_t and initializes all required variables.
+ * By default calling this function will start two tasks:
+ *      -refresh_token: executed at startup and once every 3500 seconds
+ *      
+ *      -update_playback_state: executed every time with a delay within
+ *                              subsequent calls of <update_delay> set 
+ *                              by the user or of 200ms if not set. To get
+ *                              the latest information from the spotify APIs
+ *                              the caller can either use the callback function
+ *                              to retrieve the desired information in a local
+ *                              structure of poll using spotify_get_last_info_base
+ *                              or spotify_get_last_info based on what the desired
+ *                              information is and on what it was configured before
+ *                              calling spotify_start.
  * 
  * @return esp_err_t    Either ESP_OK on success or ESP_FAIL on error.
 */
@@ -310,7 +329,9 @@ void spotify_action_skip_previous(void);
 
 
 /**
- * Adds the currently playing track to the user's "Your Music" library playlist
+ * Adds the currently playing track to the user's "Your Music" library playlist.
+ * 
+ * @note Requires permission "user-library-modify".
 */
 void spotify_add_currently_playing_to_favourite(void);
 
@@ -335,8 +356,7 @@ void spotify_action_set_playback_volume(uint8_t volume_percent);
 */
 void spotify_action_increase_playback_volume(uint8_t volume_increase_amount);
 
-/**
- * 
+/** 
  * Decreases the playback volume on the currently playing device to the value given,
  * effectively emulating a - volume button
  * 
@@ -352,6 +372,7 @@ typedef enum{
     SPOTIFY_REPEAT_MODE_OFF = 0,
     SPOTIFY_REPEAT_MODE_CONTEXT = 1,
     SPOTIFY_REPEAT_MODE_TRACK = 2,
+    SPOTIFY_REPEAT_MODE_AUTO = 3,
 }SpotifyRepeatModeEnum_t;
 // static const char *spotify_repeat_mode_name[3] = {"track", "context", "off"};
 
@@ -361,14 +382,93 @@ typedef enum{
  * 
  * @param repeat_mode   The repeat mode to set for the currently
  *                      active device. Accepted values are as per
- *                      SpotifyRepeatModeEnum_t.
+ *                      SpotifyRepeatModeEnum_t. If SPOTIFY_SET_REPEAT_MODE_AUTO
+ *                      is used the request will automatically set the repeat mode
+ *                      to the next based on the current one, e.g., if
+ *                      the repeat mode is set to off will go to context,
+ *                      if called again on track, subsequent calls will loop through
+ *                      these as off->context->track.
 */
 void spotify_action_set_repeat_mode(uint8_t repeat_mode);
 
+
+typedef enum{
+    SPOTIFY_TOGGLE_SHUFFLE_ON = 0,
+    SPOTIFY_TOGGLE_SHUFFLE_OFF = 1,
+    SPOTIFY_TOGGLE_SHUFFLE_AUTO = 2,
+}SpotifyToggleShuffleEnum_t;
 /**
  * Toggle shuffle on or off for user's playback. If the value
  * is previously off it will be turned on and viceversa.
+ * 
+ * @param shuffle       If true (1) will enable shuffle for the current
+ *                      queue, if false (0) will be disabled. Using 
+ *                      SPOTIFY_TOGGLE_SHUFFLE_AUTO will set the shuffle 
+ *                      mode opposite to the one currently used, e.g., 
+ *                      if shuffle is active will be set to off and 
+ *                      viceversa.
 */
 void spotify_action_toggle_playback_shuffle(uint8_t shuffle);
+
+#pragma pack(push, 1)
+typedef struct{
+    SpotifyDevice_t **available_devices;            /** @brief Array containing the currently available devices */
+    uint8_t available_devices_count;                /** @brief The number of available devices */
+}SpotifyAvailableDevices_t;
+#pragma pack(pop)
+
+/**
+ * Get information about a user's available devices.
+ * 
+ * @note requires permission "user-read-playback-state"
+ * 
+ * @return A pointer to SpotifyAvailableDevices_t with the number of
+ * available devices and the the devices information themselves. Note that 
+ * the memory allocated to store the available devices is not freed, users
+ * that want to reuse the object may consider not calling free on this pointer
+ * since subsequenc calls will reuse the memory.
+*/
+SpotifyAvailableDevices_t* spotify_get_available_devices(void);
+
+
+typedef enum{
+    SPOTIFY_ALBUM_ART_SIZE_SMALLEST = 0,
+    SPOTIFY_ALBUM_ART_SIZE_64x64 = 64,
+    SPOTIFY_ALBUM_ART_SIZE_300x300 = 300,
+    SPOTIFY_ALBUM_ART_SIZE_LARGEST
+}SpotifyAlbumArtSize_t;
+
+/**
+ * Writes in the user img_buffer the album cover image of the currently playing track 
+ * of the specified image size.
+ * 
+ * @param size              The image size to retrieve as per SpotifyAlbumArtSize_t. 
+ *                          Images larger than 300x300 will most likely require too 
+ *                          much memory to work. Use at your own risk XD.
+ * 
+ * @param img_buff          User buffer in which the image data will be written.
+ * 
+ * @param img_buff_size     The size of the user image buffer.
+ * 
+ * @return int              The number of bytes written, or -1 on error
+*/
+
+int spotify_get_album_cover_art_latest(uint16_t size, char *img_buff, int img_buff_size);
+
+/**
+ * Similar functionality to spotify_get_album_cover_art_latest, exept that it retrieves the 
+ * album art given an url.
+ * 
+ * @param url           The image url to be retrieved.
+ * 
+ * @param img_buff      User buffer in which the image data will be written.
+ * 
+ * @param img_buff_size The size of the user image buffer.
+ * 
+ * @return esp_err_t        Either ESP_OK on success or ESP_FAIL on error, e.g., image buffer 
+ *                          is not big enough to store image data
+*/
+int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff_size);
+
 
 #endif // SPOTIFY_H
