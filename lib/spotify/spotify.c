@@ -116,8 +116,11 @@ void get_new_token(void *pvParam){
                         sprintf(_spotify_bearer_auth, SPOTIFY_AUTH_FIELD_BEARER_TEMPLATE, access_token->valuestring);
 
                         if(xQueueSend(xTokenQueue, access_token->valuestring, 0) != pdTRUE){
-                            //reschedule task in 1 sec
+                            //reschedule task in 1 sec if sending to queue fails, should not
                             xTimerReset(xRefreshTokenTimer, 1000/ portTICK_PERIOD_MS);
+                        }else{
+                            // If success to send to queue, it means that the token is available
+                            SPOTIFY_TOKEN_AVAILABLE = 1;
                         }
                     }
                     free(response_data);
@@ -135,7 +138,7 @@ void get_new_token(void *pvParam){
 }
 
 
-static esp_err_t my_http_event_handler(esp_http_client_event_t *evt)
+static esp_err_t spotify_playback_state_http_response_handler(esp_http_client_event_t *evt)
 {
     switch (evt->event_id)
     {
@@ -219,18 +222,11 @@ void task_skip_next(void *pvParam){
 
     //free(auth_value);
     esp_http_client_cleanup(client);
-
+    
     vTaskDelete(NULL);
 } 
 
-void spotify_action_skip_next(void){
-
-    // if(xSemaphoreTake(xSkipNextSemaphore, 0) == pdFALSE){
-    //     //task already running
-    //     ESP_LOGE(SPOTIFY_TAG, "TASK ALREADY RUNNING");
-    //     return;
-    // }
-    // xSemaphoreGive(xSkipNextSemaphore);
+void spotify_action_skip_next(){
     xTaskCreate(task_skip_next, "skip_next", 4096, NULL, 4, NULL);
 }
 
@@ -361,7 +357,7 @@ void task_add_currently_playing_to_favourite(void *pvParam){
     vTaskDelete(NULL);
 }
 
-void spotify_add_currently_playing_to_favourite(void){
+void spotify_action_add_currently_playing_to_favourite(void){
 
     char *item_id = SPOTIFY_GET_TRACK_ID(_spotify_config.info_type);
 
@@ -912,7 +908,7 @@ void update_playback_state(void *pvParam){
     esp_http_client_config_t config = {
         .url = SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE),
         .method = HTTP_METHOD_GET,
-        .event_handler = my_http_event_handler,
+        .event_handler = spotify_playback_state_http_response_handler,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .buffer_size = 2048,
@@ -977,6 +973,8 @@ void update_playback_state(void *pvParam){
                 default:
                     break;
             }
+
+            SPOTIFY_INFO_AVAILABLE = 1;
 
             //this condition, takes approximately 16 milliseconds to process, the outer loop is much slower than the parsing
             /// TODO: find fix!!
@@ -1075,8 +1073,66 @@ SpotifyAvailableDevices_t* spotify_get_available_devices(void){
 }
 
 
+/**
+ * TODO: currently works and correctly switches the device, however, the playback does not start on the 
+ * device it is switched to, maybe requires json body to be created as well to indicate which context to
+ * play??
+*/
+void task_change_playback_device(void *pvParam){
+
+    char *device_id = (char *)pvParam;
+
+    esp_http_client_config_t config = {
+        .url = SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_PLAY_ENDPOINT),
+        .method = HTTP_METHOD_PUT,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 1024
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    char *new_url = calloc(1, 1024);
+    sprintf(new_url, "%s?device_id=%s", SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_PLAY_ENDPOINT), device_id);
+    esp_http_client_set_url(client, new_url);
+    esp_http_client_set_header(client, SPOTIFY_AUTH_KEY, _spotify_bearer_auth);
+
+    if(esp_http_client_perform(client) == ESP_OK){
+
+    }else{
+        ESP_LOGE(SPOTIFY_TAG, "Failed performing request to change device to %s", device_id);
+    }
+
+    free(device_id);
+    free(new_url);
+
+    esp_http_client_cleanup(client);
+
+    vTaskDelete(NULL);
+}
+
+void spotify_action_playback_to_device(char *device_id){
+
+    if(device_id == NULL){
+        ESP_LOGE(SPOTIFY_TAG, "Device id is NULL!");
+        return;
+    }
+
+    char *device_id_mem = calloc(1, strlen(device_id)+1);
+    if(device_id_mem == NULL){
+        ESP_LOGE(SPOTIFY_TAG, "Failed allocating memory for device id");
+        return;
+    }
+    strcpy(device_id_mem, device_id);
+
+    xTaskCreate(task_change_playback_device, "change_playback_device", 4096, device_id_mem, 4, NULL);
+
+
+}
+
+
 uint16_t img_offset = 0;
-static esp_err_t image_evt_handler(esp_http_client_event_t *evt){
+static esp_err_t spotify_image_http_response_handler(esp_http_client_event_t *evt){
     switch(evt->event_id){
         case HTTP_EVENT_ON_DATA:{
             ESP_LOGI(SPOTIFY_TAG, "Received %d bytes of image", evt->data_len);
@@ -1103,7 +1159,7 @@ int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff
 
     esp_http_client_config_t config = {
         .url = url,
-        .event_handler = image_evt_handler,
+        .event_handler = spotify_image_http_response_handler,
         .method = HTTP_METHOD_GET,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -1121,7 +1177,6 @@ int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff
         esp_http_client_cleanup(client);
         return ESP_FAIL;
     }
-
     img_buff[img_cl] = '\0';
     
     ESP_LOGI(SPOTIFY_TAG, "Image size received is %d bytes", img_cl);
@@ -1240,7 +1295,6 @@ esp_err_t spotify_start(void){
             break;
         }
         case SPOTIFY_INFO_BASE:{
-            /// TODO: ALLOCATE MEMORY FOR SpotifyInfoBase_t
             _spotify_info_base = calloc(1, sizeof(SpotifyInfoBase_t));
             if(_spotify_info_base == NULL){
                 ESP_LOGE(SPOTIFY_TAG, "Failed allocating memory to SPOTIFY_INFO_BASE");

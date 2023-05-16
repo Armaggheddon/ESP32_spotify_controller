@@ -371,6 +371,7 @@ void task_buttons_handler(void *pvParams){
                 }
                 case BUTTON_ADD_TO_FAVOURITE_ID:{
                     ESP_LOGI(TAG, "\tADD TO FAVOURITE PRESSED");
+                    spotify_action_add_currently_playing_to_favourite();
                     break;
                 }
 
@@ -542,11 +543,6 @@ void app_main()
         if(_info->item->name == NULL) ESP_LOGI(TAG, "SONG_NAME IS NULL");
         else ESP_LOGI(TAG, "\t\t%s %d:%02d/%d:%02d volume: %u%%[stack available %lu]", _info->item->name, min_elapsed, seconds_elapsed%60, min_total, seconds_total%60, _info->device->volume_percent, esp_get_free_heap_size());
 
-
-        // ESP_LOGI(TAG, "smallest image size-> h=%d, w=%d", 
-        //     _info->item->album->images[_info->item->album->images_count-1]->height,
-        //     _info->item->album->images[_info->item->album->images_count-1]->width
-        // );
         vTaskDelay(500/portTICK_PERIOD_MS);
 
     }
