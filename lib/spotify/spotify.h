@@ -178,6 +178,22 @@ typedef struct{
 
 
 /**
+ * Some functions allow to execute function calls asyncronously, especially
+ * the ones that require server communication which may take some time. Calling the 
+ * functions with wither SPOTIFY_ASYNC or SPOTIFY_SYNC allows the caller to specify
+ * the behaviour for each function call. 
+*/
+typedef enum{
+    SPOTIFY_ASYNC = 0,                          /** @brief The call to the function shall be performed asyncronously, i.e., though a task without blocking the caller */
+    SPOTIFY_SYNC = 1,                           /** @brief The call to the function shall be performed synchronously, i.e., directly executing the function code and returning on finish */
+} SpotifyCallType_t;
+
+
+
+static volatile uint8_t SPOTIFY_TOKEN_AVAILABLE = 0;    /** @brief When =1 the token has been retrieved and is available to authenticate calls to the Spotify APIs */
+static volatile uint8_t SPOTIFY_INFO_AVAILABLE = 0;     /** @brief When =1 SpotifyInfo_t or SpotifyInfoBase_t (depending on the configuration) is available */
+
+/**
  * Initializes the library local representation for the Spotify CLIENT_ID, 
  * CLIENT_SECRET and REFRESH_TOKEN. Additionally sets the type of informations
  * that the user wants to retrieve from SpotifyInfoType_t.
@@ -333,7 +349,7 @@ void spotify_action_skip_previous(void);
  * 
  * @note Requires permission "user-library-modify".
 */
-void spotify_add_currently_playing_to_favourite(void);
+void spotify_action_add_currently_playing_to_favourite(void);
 
 /**
  * Sets the playback volume on the currently playing device to the value given
@@ -430,6 +446,18 @@ typedef struct{
 */
 SpotifyAvailableDevices_t* spotify_get_available_devices(void);
 
+/**
+ * Changes the playback to the device identified by the device_id supplied.
+ * Calling this function does not guarantee that the playback changes to the 
+ * provided device.
+ * 
+ * @param device_id     The Spotify device ID. Can be obtained from SpotifyInfo_t and 
+ *                      SpotifyInfoBase_t through the field device <SpotifyDevice_t>.
+ *                      Alternatively, a list of available devices for the current user
+ *                      can be obtained by calling spotify_get_available_devices.
+*/
+void spotify_action_playback_to_device(char *device_id);
+
 
 typedef enum{
     SPOTIFY_ALBUM_ART_SIZE_SMALLEST = 0,
@@ -450,9 +478,8 @@ typedef enum{
  * 
  * @param img_buff_size     The size of the user image buffer.
  * 
- * @return int              The number of bytes written, or -1 on error
+ * @return int              The number of bytes written, -1 on error.
 */
-
 int spotify_get_album_cover_art_latest(uint16_t size, char *img_buff, int img_buff_size);
 
 /**
@@ -465,8 +492,7 @@ int spotify_get_album_cover_art_latest(uint16_t size, char *img_buff, int img_bu
  * 
  * @param img_buff_size The size of the user image buffer.
  * 
- * @return esp_err_t        Either ESP_OK on success or ESP_FAIL on error, e.g., image buffer 
- *                          is not big enough to store image data
+ * @return int          The number of bytes written, -1 on error.
 */
 int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff_size);
 
