@@ -286,7 +286,7 @@ void IRAM_ATTR gpio_interrupt_handler(void *arg){
             info->state++;
         }
         BaseType_t xHigerPriorityTaskWoken = pdFALSE;
-        xQueueSendFromISR(xButtonEvtQueue, &(info), &xHigerPriorityTaskWoken);
+        xQueueSendFromISR(xButtonEvtQueue, (info), &xHigerPriorityTaskWoken);
 
         if(xHigerPriorityTaskWoken){
             portYIELD_FROM_ISR();
@@ -300,6 +300,8 @@ void task_buttons_handler(void *pvParams){
 
     for(;;){
         if(xQueueReceive(xButtonEvtQueue, &current_button, portMAX_DELAY) == pdTRUE){
+
+            ESP_LOGI(TAG, "Pressed button pin %d", current_button.button_pin);
 
             switch (current_button.id){
                 case BUTTON_PLAY_PAUSE_ID:{
