@@ -12,6 +12,8 @@
 #include <nvs_flash.h>
 
 #include "../lib/spotify/spotify.h"
+#include "../lib/buttons_manager/buttons_manager.h"
+
 #include <driver/gpio.h>
 
 
@@ -253,19 +255,6 @@ void wifi_init()
 
 #define DEBOUNCE_TIME_US 300000 // = 300 ms
 
-typedef struct {
-    uint8_t BUTTON_ID;
-    int64_t LAST_PRESSED;
-}BUTTON_INFO;
-
-BUTTON_INFO button_playpause;
-BUTTON_INFO button_next;
-BUTTON_INFO button_previous;
-BUTTON_INFO button_volume_up;
-BUTTON_INFO button_volume_down;
-BUTTON_INFO button_shuffle;
-BUTTON_INFO button_repeat_mode;
-BUTTON_INFO button_add_to_favourite;
 
 enum BUTTON_ID{
     BUTTON_PLAY_PAUSE_ID = 0,
@@ -278,29 +267,6 @@ enum BUTTON_ID{
     BUTTON_ADD_TO_FAVOURITE_ID
 };
 
-void initButtons(){
-    button_playpause.BUTTON_ID = BUTTON_PLAY_PAUSE_ID;
-    button_playpause.LAST_PRESSED = 0;
-
-    button_next.BUTTON_ID = BUTTON_SKIP_NEXT_ID;
-    button_next.LAST_PRESSED = 0;
-
-    button_previous.BUTTON_ID = BUTTON_SKIP_PREVIOUS_ID;
-    button_previous.LAST_PRESSED = 0;
-
-    button_volume_up.BUTTON_ID = BUTTON_VOLUME_UP_ID;
-    button_volume_up.LAST_PRESSED = 0;
-
-    button_volume_down.BUTTON_ID = BUTTON_VOLUME_DOWN_ID;
-    button_volume_down.LAST_PRESSED = 0;
-
-    button_repeat_mode.BUTTON_ID = BUTTON_REPEAT_MODE_ID;
-    button_repeat_mode.LAST_PRESSED = 0;
-
-    button_shuffle.BUTTON_ID = BUTTON_SHUFFLE_ID;
-    button_shuffle.LAST_PRESSED = 0;
-}
-
 void song_change(SpotifyInfoBase_t *data){
     ESP_LOGI(TAG, "Song has changed-> %s", data->song_name);
 }
@@ -309,12 +275,18 @@ QueueHandle_t xButtonEvtQueue;
 
 void IRAM_ATTR gpio_interrupt_handler(void *arg){
 
-    BUTTON_INFO *info = (BUTTON_INFO*)arg;
+    ButtonInfo_t *info = (ButtonInfo_t*)arg;
     int64_t now_millis = 0;
-    if( ((now_millis = esp_timer_get_time()) - info->LAST_PRESSED) > DEBOUNCE_TIME_US){
-        info->LAST_PRESSED = now_millis;
+    if( ((now_millis = esp_timer_get_time()) - info->last_pressed) > DEBOUNCE_TIME_US){
+        info->last_pressed = now_millis;
+        
+        if(info->state + 1 == info->max_states){
+            info->state = 0; // loop back to 0
+        }else{
+            info->state++;
+        }
         BaseType_t xHigerPriorityTaskWoken = pdFALSE;
-        xQueueSendFromISR(xButtonEvtQueue, &(info->BUTTON_ID), &xHigerPriorityTaskWoken);
+        xQueueSendFromISR(xButtonEvtQueue, &(info), &xHigerPriorityTaskWoken);
 
         if(xHigerPriorityTaskWoken){
             portYIELD_FROM_ISR();
@@ -324,12 +296,12 @@ void IRAM_ATTR gpio_interrupt_handler(void *arg){
 
 void task_buttons_handler(void *pvParams){
 
-    uint8_t BUTTON_ID = 0;
+    ButtonInfo_t current_button;
 
     for(;;){
-        if(xQueueReceive(xButtonEvtQueue, &BUTTON_ID, portMAX_DELAY) == pdTRUE){
+        if(xQueueReceive(xButtonEvtQueue, &current_button, portMAX_DELAY) == pdTRUE){
 
-            switch (BUTTON_ID){
+            switch (current_button.id){
                 case BUTTON_PLAY_PAUSE_ID:{
                     ESP_LOGI(TAG, "\tPAUSE/PLAY PRESSED");
                     spotify_action_play_pause();
@@ -437,77 +409,20 @@ void app_main()
 
     // TOKEN GOTTTTTTT
 
-    initButtons();
 
-    xButtonEvtQueue = xQueueCreate(10, sizeof(uint8_t));
+    xButtonEvtQueue = xQueueCreate(5, sizeof(ButtonInfo_t));
 
-    gpio_config_t btn_skip_prev_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_SKIP_PREVIOUS)
-    };
-    gpio_config_t btn_skip_next_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_SKIP_NEXT)
-    };
-    gpio_config_t btn_play_pause_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_PLAY_PAUSE)
-    };
-    gpio_config_t btn_volume_up_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_VOLUME_UP)
-    };
-    gpio_config_t btn_volume_down_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_VOLUME_DOWN)
-    };
-    gpio_config_t btn_shuffle_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_SHUFFLE)
-    };
-    gpio_config_t btn_repeat_mode_config ={
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLDOWN_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
-        .pin_bit_mask = (1ULL << BUTTON_REPEAT_MODE)
-    };
+    buttons_init(7);
 
-    gpio_config(&btn_skip_prev_config);
-    gpio_config(&btn_skip_next_config);
-    gpio_config(&btn_play_pause_config);
-    gpio_config(&btn_volume_up_config);
-    gpio_config(&btn_volume_down_config);
-    gpio_config(&btn_shuffle_config);
-    gpio_config(&btn_repeat_mode_config);
-
-
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(BUTTON_PLAY_PAUSE, gpio_interrupt_handler, (void*)&button_playpause);
-    gpio_isr_handler_add(BUTTON_SKIP_PREVIOUS, gpio_interrupt_handler, (void*)&button_previous);
-    gpio_isr_handler_add(BUTTON_SKIP_NEXT, gpio_interrupt_handler, (void*)&button_next);
-    gpio_isr_handler_add(BUTTON_VOLUME_UP, gpio_interrupt_handler, (void*)&button_volume_up);
-    gpio_isr_handler_add(BUTTON_VOLUME_DOWN, gpio_interrupt_handler, (void*)&button_volume_down);
-    gpio_isr_handler_add(BUTTON_REPEAT_MODE, gpio_interrupt_handler, (void*)&button_repeat_mode);
-    gpio_isr_handler_add(BUTTON_SHUFFLE, gpio_interrupt_handler, (void*)&button_shuffle);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_SKIP_PREVIOUS_ID, BUTTON_SKIP_PREVIOUS, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_SKIP_NEXT_ID, BUTTON_SKIP_NEXT, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_PLAY_PAUSE_ID, BUTTON_PLAY_PAUSE, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_VOLUME_UP_ID, BUTTON_VOLUME_UP, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_VOLUME_DOWN_ID, BUTTON_VOLUME_DOWN, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_SHUFFLE_ID, BUTTON_SHUFFLE, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_REPEAT_MODE_ID, BUTTON_REPEAT_MODE, 0, 2, 0, gpio_interrupt_handler);
+    
+    buttons_start();
 
 
     xTaskCreate(task_buttons_handler, "task_button_handler", 2048, NULL, 5, NULL);
