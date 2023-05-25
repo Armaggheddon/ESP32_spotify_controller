@@ -2,6 +2,7 @@
 
 
 #include <esp_log.h>
+#include <string.h>
 
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -15,6 +16,7 @@
 #include "../lib/buttons_manager/buttons_manager.h"
 
 #include <driver/gpio.h>
+
 
 
 
@@ -300,8 +302,6 @@ void task_buttons_handler(void *pvParams){
 
     for(;;){
         if(xQueueReceive(xButtonEvtQueue, &current_button, portMAX_DELAY) == pdTRUE){
-
-            ESP_LOGI(TAG, "Pressed button pin %d", current_button.button_pin);
 
             switch (current_button.id){
                 case BUTTON_PLAY_PAUSE_ID:{

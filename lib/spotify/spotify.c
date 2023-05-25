@@ -397,7 +397,7 @@ void task_set_playback_volume(void *pvParam){
 
     free(url_request);
     esp_http_client_cleanup(client);
-    free(pvParam);      // The parameter passed was stored in memoty through a calloc in order to be accessible inside this task. Free the memory it used
+    free(pvParam);      // The parameter passed was stored in memory through a calloc in order to be accessible inside this task. Free the memory it used
 
     vTaskDelete(NULL);
 }
