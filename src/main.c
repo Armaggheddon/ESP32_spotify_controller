@@ -14,8 +14,11 @@
 
 #include "../lib/spotify/spotify.h"
 #include "../lib/buttons_manager/buttons_manager.h"
+#include "../lib/s7789_display/st7789_display.h"
+#include "../lib/jpeg_decode/jpeg_decode.h"
 
 #include <driver/gpio.h>
+#include <driver/spi_master.h>
 
 
 
@@ -28,6 +31,8 @@ edit menuconfig enabling esp_http_client basic auth, max uri length to 1024 and 
 replace esp_http_perform() with function in "new_esp_http_perform_api.txt"
 */
 
+#define USE_BUTTONS 0
+#define USE_DISPLAY 1
 
 #define BUTTON_VOLUME_UP        GPIO_NUM_4
 #define BUTTON_VOLUME_DOWN      GPIO_NUM_15
@@ -38,6 +43,19 @@ replace esp_http_perform() with function in "new_esp_http_perform_api.txt"
 
 #define BUTTON_REPEAT_MODE      GPIO_NUM_22
 #define BUTTON_SHUFFLE          GPIO_NUM_23
+
+
+#define DISPLAY_SPI_HOST_ID     SPI2_HOST
+#define DISPLAY_SCLK            GPIO_NUM_21
+#define DISPLAY_MOSI            GPIO_NUM_19
+#define DISPLAY_RES             GPIO_NUM_18
+#define DISPLAY_DC              GPIO_NUM_5
+#define DISPLAY_BLK             GPIO_NUM_4
+
+#define DISPLAY_WIDTH_PX        240
+#define DISPLAY_HEIGHT_PX       240
+#define DISPLAY_PX_COUNT        DISPLAY_WIDTH_PX * DISPLAY_HEIGHT_PX
+#define DISPLAY_PX_CLOCK_HZ     20 * 1000 * 1000
 
 
 #define REDIRECT_URI            "http://esp32_spotify.local:3000/callback"
@@ -375,7 +393,11 @@ void my_song_change(SpotifyInfo_t *info){
     int img_size = spotify_get_album_cover_art_latest(SPOTIFY_ALBUM_ART_SIZE_SMALLEST, img_buff, 4096);
     if(img_size > 0){
         ESP_LOGI(TAG, "SUCCESS  downloading image [%d bytes]!!", img_size);
-        ESP_LOG_BUFFER_HEX(TAG, img_buff, img_size);
+        //ESP_LOG_BUFFER_HEX(TAG, img_buff, img_size);
+
+        jpeg_decode_process((uint8_t *)img_buff);
+        st7789_display_push();
+
     }else if(img_size == -1){
         ESP_LOGI(TAG, "ERROR downloading image!!");
     }
@@ -410,8 +432,28 @@ void app_main()
     //printf("\n");
 
     // TOKEN GOTTTTTTT
+#if USE_DISPLAY
 
+    st7789_display_init(
+        DISPLAY_SPI_HOST_ID,
+        DISPLAY_SCLK,
+        DISPLAY_MOSI,
+        DISPLAY_RES,
+        DISPLAY_DC,
+        DISPLAY_BLK,
+        DISPLAY_WIDTH_PX,
+        DISPLAY_HEIGHT_PX,
+        DISPLAY_PX_COUNT,
+        0,
+        0,
+        DISPLAY_PX_CLOCK_HZ);
+    
+    st7789_display_begin();
+    jpeg_decode_init(st7789_display_get_frame_buffer());
 
+#endif
+
+#if USE_BUTTONS
     xButtonEvtQueue = xQueueCreate(5, sizeof(ButtonInfo_t));
 
     buttons_init(7);
@@ -426,42 +468,41 @@ void app_main()
     
     buttons_start();
 
-
     xTaskCreate(task_buttons_handler, "task_button_handler", 2048, NULL, 5, NULL);
-
+#endif
 
     if(spotify_init(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REFRESH_TOKEN, SPOTIFY_INFO) != ESP_OK){
         
     }
     spotify_add_on_play_pause_change_cb(&my_pp_change);
-    spotify_add_on_song_change_cb(&my_song_change);
+    spotify_add_on_song_change_cb(my_song_change);
     spotify_set_update_delay(200);
     spotify_start();
 
 
-    int min_total, min_elapsed, seconds_total, seconds_elapsed;
+    // int min_total, min_elapsed, seconds_total, seconds_elapsed;
 
-    while(1){
+    // while(1){
 
-        //SpotifyInfoBase_t *_info = spotify_get_last_info();
-        SpotifyInfo_t *_info = spotify_get_last_info();
+    //     //SpotifyInfoBase_t *_info = spotify_get_last_info();
+    //     SpotifyInfo_t *_info = spotify_get_last_info();
 
-        if(_info == NULL){
-            vTaskDelay(1000 /portTICK_PERIOD_MS);
-            continue;
-        }
+    //     if(_info == NULL){
+    //         vTaskDelay(1000 /portTICK_PERIOD_MS);
+    //         continue;
+    //     }
         
-        seconds_total = _info->item->duration_ms / 1000;
-        seconds_elapsed = _info->progress_ms /1000;
+    //     seconds_total = _info->item->duration_ms / 1000;
+    //     seconds_elapsed = _info->progress_ms /1000;
 
-        min_total = seconds_total / 60;
-        min_elapsed = seconds_elapsed / 60;
+    //     min_total = seconds_total / 60;
+    //     min_elapsed = seconds_elapsed / 60;
 
-        if(_info->item->name == NULL) ESP_LOGI(TAG, "SONG_NAME IS NULL");
-        else ESP_LOGI(TAG, "\t\t%s %d:%02d/%d:%02d volume: %u%%[stack available %lu]", _info->item->name, min_elapsed, seconds_elapsed%60, min_total, seconds_total%60, _info->device->volume_percent, esp_get_free_heap_size());
+    //     if(_info->item->name == NULL) ESP_LOGI(TAG, "SONG_NAME IS NULL");
+    //     else ESP_LOGI(TAG, "\t\t%s %d:%02d/%d:%02d volume: %u%%[stack available %lu]", _info->item->name, min_elapsed, seconds_elapsed%60, min_total, seconds_total%60, _info->device->volume_percent, esp_get_free_heap_size());
 
-        vTaskDelay(500/portTICK_PERIOD_MS);
+    //     vTaskDelay(500/portTICK_PERIOD_MS);
 
-    }
+    // }
 
 }

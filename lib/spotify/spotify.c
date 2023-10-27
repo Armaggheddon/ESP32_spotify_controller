@@ -591,6 +591,8 @@ void parse_playback_state_response(char *response){
         return;
     }
 
+    printf("Response: %s\n", response);
+
     cJSON *root = cJSON_Parse(response);
 
     if(root == NULL) {
