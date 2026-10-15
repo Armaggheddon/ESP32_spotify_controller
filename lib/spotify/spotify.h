@@ -438,11 +438,10 @@ typedef struct{
  * 
  * @note requires permission "user-read-playback-state"
  * 
- * @return A pointer to SpotifyAvailableDevices_t with the number of
- * available devices and the the devices information themselves. Note that 
- * the memory allocated to store the available devices is not freed, users
- * that want to reuse the object may consider not calling free on this pointer
- * since subsequenc calls will reuse the memory.
+ * @return A pointer to SpotifyAvailableDevices_t, holding the number of
+ * available devices along with the devices themselves. The memory allocated
+ * for the devices is not freed: later calls reuse it, so callers that keep
+ * the pointer around should not free it.
 */
 SpotifyAvailableDevices_t* spotify_get_available_devices(void);
 

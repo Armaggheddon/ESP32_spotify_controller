@@ -79,14 +79,29 @@ void buttons_start(void){
             .pin_bit_mask = (1ULL << buttons[i]->button_pin)
         };
 
-        gpio_config(&config);
+        esp_err_t err = gpio_config(&config);
+        if(err != ESP_OK){
+            ESP_LOGE(BUTTONS_MANAGER_TAG, "Failed configuring pin %d for button ID %d: %s",
+                buttons[i]->button_pin, buttons[i]->id, esp_err_to_name(err));
+        }
     }
 
-    gpio_install_isr_service(0);
+    esp_err_t isr_service_err = gpio_install_isr_service(0);
+    //ESP_ERR_INVALID_STATE means the service was already installed, which is fine
+    if(isr_service_err != ESP_OK && isr_service_err != ESP_ERR_INVALID_STATE){
+        ESP_LOGE(BUTTONS_MANAGER_TAG, "Failed installing the ISR service: %s", esp_err_to_name(isr_service_err));
+    }
 
     for(unsigned int i = 0; i<buttons_count; i++){
 
-        gpio_isr_handler_add(buttons[i]->button_pin, buttons[i]->cb, (void*)buttons[i]);
-
+        //The return value matters: if this fails the pin is configured but its
+        //interrupt never fires, so the button silently does nothing
+        esp_err_t err = gpio_isr_handler_add(buttons[i]->button_pin, buttons[i]->cb, (void*)buttons[i]);
+        if(err != ESP_OK){
+            ESP_LOGE(BUTTONS_MANAGER_TAG, "Failed adding the ISR handler for pin %d (button ID %d): %s",
+                buttons[i]->button_pin, buttons[i]->id, esp_err_to_name(err));
+        }else{
+            ESP_LOGD(BUTTONS_MANAGER_TAG, "Button ID %d registered on pin %d", buttons[i]->id, buttons[i]->button_pin);
+        }
     }
 }

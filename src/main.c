@@ -21,28 +21,25 @@
 #include <driver/spi_master.h>
 
 
-
-
-/*
-Add mdns to components in platform in .platformio
-
-edit menuconfig enabling esp_http_client basic auth, max uri length to 1024 and max header length to 1024
-
-replace esp_http_perform() with function in "new_esp_http_perform_api.txt"
-*/
-
-#define USE_BUTTONS 0
+#define USE_BUTTONS 1
 #define USE_DISPLAY 1
 
-#define BUTTON_VOLUME_UP        GPIO_NUM_4
-#define BUTTON_VOLUME_DOWN      GPIO_NUM_15
+/*  Buttons are active low: each one shorts the pin to ground and the internal
+    pull up keeps it high when released, so presses are falling edges.
+    NOTE: these pins must NOT overlap the DISPLAY_* pins below, otherwise the
+    button configuration would take over the SPI/control pins and the display
+    would stop working. */
+#define BUTTON_INTR_EDGE        GPIO_INTR_NEGEDGE
 
-#define BUTTON_SKIP_NEXT        GPIO_NUM_21
-#define BUTTON_PLAY_PAUSE       GPIO_NUM_19
-#define BUTTON_SKIP_PREVIOUS    GPIO_NUM_18
+#define BUTTON_VOLUME_UP        GPIO_NUM_33
+#define BUTTON_VOLUME_DOWN      GPIO_NUM_25
 
-#define BUTTON_REPEAT_MODE      GPIO_NUM_22
-#define BUTTON_SHUFFLE          GPIO_NUM_23
+#define BUTTON_SKIP_NEXT        GPIO_NUM_26
+#define BUTTON_PLAY_PAUSE       GPIO_NUM_32
+#define BUTTON_SKIP_PREVIOUS    GPIO_NUM_14
+
+#define BUTTON_REPEAT_MODE      GPIO_NUM_13
+#define BUTTON_SHUFFLE          GPIO_NUM_12
 
 
 #define DISPLAY_SPI_HOST_ID     SPI2_HOST
@@ -58,83 +55,11 @@ replace esp_http_perform() with function in "new_esp_http_perform_api.txt"
 #define DISPLAY_PX_CLOCK_HZ     20 * 1000 * 1000
 
 
-#define REDIRECT_URI            "http://esp32_spotify.local:3000/callback"
-#define REDIRECT_URI_ENC        "http%3A%2F%2Fesp32_spotify.local%3A3000%2Fcallback"
-
-#define MY_MIN(a,b)             (((a)<(b))?(a):(b))
-
 #define WIFI_CONNECTED_BIT      BIT0
 
 static const char *TAG = "spotify";
 static EventGroupHandle_t wifi_event_group;
 
-
-
-// void get_spotify_token()
-// {
-
-//     esp_http_client_config_t config = {
-//         .url = SPOTIFY_REQUEST_TOKEN_ENDPOINT,
-//         .event_handler = my_http_event_handler,
-//         .method = HTTP_METHOD_POST,
-//         .transport_type = HTTP_TRANSPORT_OVER_SSL,
-//         .crt_bundle_attach = esp_crt_bundle_attach,
-//         .keep_alive_enable = true,
-//         .buffer_size = 2048,
-//     };
-
-//     esp_http_client_handle_t client = esp_http_client_init(&config);
-//     esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
-
-//     unsigned char *buff = malloc(2048);
-//     int written = sprintf((char *)buff, "%s:%s", SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET);
-    
-//     unsigned char *base64_auth = malloc(2048);
-//     size_t base64_auth_len = 0;
-//     mbedtls_base64_encode(base64_auth, 2048, &base64_auth_len, buff, written);
-//     sprintf((char*) buff, "Basic %s", (char*) base64_auth);
-//     esp_http_client_set_header(client, "Authorization", (char*) buff);
-
-//     written = sprintf((char *)buff, SPOTIFY_REQUEST_TOKEN_POST_TEMPLATE, SPOTIFY_REQUEST_CODE, REDIRECT_URI);
-
-//     esp_http_client_set_post_field(client, (char *)buff, written);
-
-//     if (esp_http_client_perform(client) == ESP_OK)
-//     {
-//         ESP_LOGI(TAG, "CLIENT_PERFORM_TOKEN_REQUEST");
-//         esp_http_client_fetch_headers(client);
-//         int cl = esp_http_client_get_content_length(client);
-//         ESP_LOGI(TAG, "HTTP_RESPONSE_CODE: %d cl = %d", esp_http_client_get_status_code(client), cl);
-//         if (cl > 0)
-//         {
-//             int eff_cl = esp_http_client_read_response(client, (char*)buff, 2048);
-//             buff[eff_cl] = 0;
-
-//             ESP_LOGI(TAG, "effective read: %d, data:\n%s", eff_cl, buff);
-
-//             cJSON *root = cJSON_Parse((char*)buff);
-//             cJSON *access_token_json = cJSON_GetObjectItem(root, "refresh_token");
-//             //cJSON *token_type_json = cJSON_GetObjectItem(root, "token_type");
-//             if (access_token_json && access_token_json->valuestring /*&& token_type_json && token_type_json->valuestring*/)
-//             {
-//                 strncpy(SPOTIFY_TOKEN, access_token_json->valuestring, SPOTIFY_TOKEN_LEN);
-//                 //strncpy(token_type, token_type_json->valuestring, token_type);
-//             }
-//             cJSON_free(access_token_json);
-//             //cJSON_free(token_type_json);
-//             cJSON_Delete(root);
-//             TOKEN_RECV = 1;
-//         }
-
-//         ESP_LOGI(TAG, "Access token: %s", SPOTIFY_TOKEN);
-//         //ESP_LOGI(TAG, "Token type: %s", token_type);
-
-        
-//     }
-//     free(buff);
-//     free(base64_auth);
-//     esp_http_client_cleanup(client);
-// }
 
 void wifi_event_handler(
     void *arg,
@@ -183,7 +108,7 @@ void wifi_init()
     esp_netif_create_default_wifi_sta();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT,
         ESP_EVENT_ANY_ID,
@@ -203,76 +128,6 @@ void wifi_init()
 };
 
 
-// httpd_handle_t server = NULL;
-// esp_err_t handle_get_auth_code(httpd_req_t *req)
-// {
-
-//     char *query = NULL;
-//     size_t query_len = httpd_req_get_url_query_len(req);
-//     if (query_len > 0)
-//     {
-
-//         query = malloc(query_len);
-//         httpd_req_get_url_query_str(req, query, query_len);
-//         // ESP_LOGI(TAG, "Received query str: %s", query);
-//         if (httpd_query_key_value(query, SPOTIFY_REQUEST_CODE_QUERY_KEY, SPOTIFY_AUTH_CODE, SPOTIFY_TOKEN_LEN) == ESP_OK)
-//         {
-
-//             ESP_LOGI(TAG, "Received auth code: %s", SPOTIFY_AUTH_CODE);
-
-//             ACCESS_CODE_RECV = 1;
-//             httpd_stop(server);
-//         }
-
-//         free(query);
-//     }
-
-//     return ESP_OK;
-// }
-
-// const char *webpageTemplate = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no\" /></head><body><div><a href=\"https://accounts.spotify.com/authorize?client_id=%s&response_type=code&redirect_uri=%s&scope=%s\">spotify Auth</a></div></body></html>";
-
-// esp_err_t handle_get_index(httpd_req_t *req)
-// {
-//     char webpage[800];
-//     int written = sprintf(webpage, webpageTemplate, SPOTIFY_CLIENT_ID, REDIRECT_URI_ENC, SPOTIFY_REQUEST_SCOPE);
-//     httpd_resp_send(req, webpage, written);
-
-//     return ESP_OK;
-// }
-
-// const httpd_uri_t authorization_uri = {
-//     .uri = "/callback",
-//     .method = HTTP_GET,
-//     .handler = handle_get_auth_code,
-//     .user_ctx = NULL,
-// };
-// const httpd_uri_t index_uri = {
-//     .uri = "/",
-//     .method = HTTP_GET,
-//     .handler = handle_get_index,
-//     .user_ctx = NULL,
-// };
-
-// void start_ws()
-// {
-//     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-//     config.server_port = 3000;
-
-//     if (httpd_start(&server, &config) == ESP_OK)
-//     {
-//         if (server == NULL)
-//         {
-//             ESP_LOGE(TAG, "Server creation error");
-//             return;
-//         }
-//         httpd_register_uri_handler(server, &authorization_uri);
-//         httpd_register_uri_handler(server, &index_uri);
-//     }
-// }
-
-
-
 #define DEBOUNCE_TIME_US 300000 // = 300 ms
 
 
@@ -286,10 +141,6 @@ enum BUTTON_ID{
     BUTTON_SHUFFLE_ID,
     BUTTON_ADD_TO_FAVOURITE_ID
 };
-
-void song_change(SpotifyInfoBase_t *data){
-    ESP_LOGI(TAG, "Song has changed-> %s", data->song_name);
-}
 
 QueueHandle_t xButtonEvtQueue;
 
@@ -375,30 +226,44 @@ void task_buttons_handler(void *pvParams){
 }
 
 
-
-
 void my_pp_change(uint8_t is_playing){
     ESP_LOGI(TAG, "PLAYBACK CHANGED TO %s", (is_playing)? "PLAY": "PAUSE");
 }
 
-char img_buff[4096];
+//The smallest album art spotify returns is 64x64, but the jpeg can still be
+//several KB, the decoder and the http handler are both bounded by this size
+#define IMG_BUFF_SIZE (16 * 1024)
+
+char img_buff[IMG_BUFF_SIZE];
+
+//The smallest album art Spotify provides is used as the decode target: the display
+//driver upscales it to the screen size while sending it, so only this small
+//RGB565 buffer is needed instead of a full resolution one
+#define ALBUM_ART_BUFFER_SIZE (SPOTIFY_ALBUM_ART_SIZE_64x64 * SPOTIFY_ALBUM_ART_SIZE_64x64 * 2)
+
+static uint8_t album_art_buffer[ALBUM_ART_BUFFER_SIZE];
 
 void my_song_change(SpotifyInfo_t *info){
-    ESP_LOGI(TAG, "SONG CHANGED TO %s, album art(smallest): %s [h:%d, w:%d]", 
-        info->item->name, 
-        info->item->album->images[info->item->album->images_count-1]->url,
-        info->item->album->images[info->item->album->images_count-1]->height,
-        info->item->album->images[info->item->album->images_count-1]->width
-    );
-    int img_size = spotify_get_album_cover_art_latest(SPOTIFY_ALBUM_ART_SIZE_SMALLEST, img_buff, 4096);
+
+    ESP_LOGI(TAG, "SONG CHANGED TO %s", info->item->name);
+
+    if(info->item->album->images != NULL && info->item->album->images_count > 0){
+        ESP_LOGI(TAG, "\talbum art(smallest): %s [h:%d, w:%d]",
+            info->item->album->images[info->item->album->images_count-1]->url,
+            info->item->album->images[info->item->album->images_count-1]->height,
+            info->item->album->images[info->item->album->images_count-1]->width
+        );
+    }
+
+    int img_size = spotify_get_album_cover_art_latest(SPOTIFY_ALBUM_ART_SIZE_SMALLEST, img_buff, (int)sizeof(img_buff));
     if(img_size > 0){
         ESP_LOGI(TAG, "SUCCESS  downloading image [%d bytes]!!", img_size);
-        //ESP_LOG_BUFFER_HEX(TAG, img_buff, img_size);
 
-        jpeg_decode_process((uint8_t *)img_buff);
-        st7789_display_push();
+        if(jpeg_decode_process((const uint8_t *)img_buff, img_size) == 0){
+            st7789_display_push_scaled(album_art_buffer, SPOTIFY_ALBUM_ART_SIZE_64x64, SPOTIFY_ALBUM_ART_SIZE_64x64);
+        }
 
-    }else if(img_size == -1){
+    }else{
         ESP_LOGI(TAG, "ERROR downloading image!!");
     }
 }
@@ -408,32 +273,10 @@ void app_main()
 
     nvs_flash_init();
 
-    //gpio_set_direction(BUILTIN_LED_PIN, GPIO_MODE_OUTPUT);
-
-    wifi_init();
-    
-
-    //spotify_first_time_init("esp32_spotify", 3000, "/callback");
-
-    // mdns_init();
-    // mdns_hostname_set("esp32_spotify");
-
-    // start_ws();
-
-    // while(!ACCESS_CODE_RECV){ vTaskDelay( 1000/portTICK_PERIOD_MS);}
-
-    //ESP_LOGI(TAG, "\tWAITING_FOR_TOKEN");
-    //get_spotify_token();
-
-    // while (!TOKEN_RECV)
-    // {
-    //     vTaskDelay(1000 / portTICK_PERIOD_MS);
-    // }
-    //printf("\n");
-
-    // TOKEN GOTTTTTTT
 #if USE_DISPLAY
 
+    // The driver only keeps a small band buffer (a handful of destination rows),
+    // the album art is decoded at its native size and upscaled while transmitted
     st7789_display_init(
         DISPLAY_SPI_HOST_ID,
         DISPLAY_SCLK,
@@ -447,25 +290,30 @@ void app_main()
         0,
         0,
         DISPLAY_PX_CLOCK_HZ);
-    
+
     st7789_display_begin();
-    jpeg_decode_init(st7789_display_get_frame_buffer());
+
+    // Decode straight into the small album art buffer, the driver upscales it
+    jpeg_decode_init(album_art_buffer, SPOTIFY_ALBUM_ART_SIZE_64x64, SPOTIFY_ALBUM_ART_SIZE_64x64);
 
 #endif
+
+    wifi_init();
 
 #if USE_BUTTONS
     xButtonEvtQueue = xQueueCreate(5, sizeof(ButtonInfo_t));
 
     buttons_init(7);
 
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_SKIP_PREVIOUS_ID, BUTTON_SKIP_PREVIOUS, 0, 2, 0, gpio_interrupt_handler);
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_SKIP_NEXT_ID, BUTTON_SKIP_NEXT, 0, 2, 0, gpio_interrupt_handler);
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_PLAY_PAUSE_ID, BUTTON_PLAY_PAUSE, 0, 2, 0, gpio_interrupt_handler);
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_VOLUME_UP_ID, BUTTON_VOLUME_UP, 0, 2, 0, gpio_interrupt_handler);
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_VOLUME_DOWN_ID, BUTTON_VOLUME_DOWN, 0, 2, 0, gpio_interrupt_handler);
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_SHUFFLE_ID, BUTTON_SHUFFLE, 0, 2, 0, gpio_interrupt_handler);
-    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, GPIO_INTR_POSEDGE, BUTTON_REPEAT_MODE_ID, BUTTON_REPEAT_MODE, 0, 2, 0, gpio_interrupt_handler);
-    
+    //The task only logs and dispatches, the spotify actions spawn their own tasks
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_SKIP_PREVIOUS_ID, BUTTON_SKIP_PREVIOUS, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_SKIP_NEXT_ID, BUTTON_SKIP_NEXT, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_PLAY_PAUSE_ID, BUTTON_PLAY_PAUSE, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_VOLUME_UP_ID, BUTTON_VOLUME_UP, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_VOLUME_DOWN_ID, BUTTON_VOLUME_DOWN, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_SHUFFLE_ID, BUTTON_SHUFFLE, 0, 2, 0, gpio_interrupt_handler);
+    buttons_add_button( GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE, GPIO_PULLDOWN_DISABLE, BUTTON_INTR_EDGE, BUTTON_REPEAT_MODE_ID, BUTTON_REPEAT_MODE, 0, 2, 0, gpio_interrupt_handler);
+
     buttons_start();
 
     xTaskCreate(task_buttons_handler, "task_button_handler", 2048, NULL, 5, NULL);

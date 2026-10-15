@@ -45,6 +45,70 @@ char api_response[SPOTIFY_MAX_API_LEN];
 uint16_t api_response_pos;
 
 
+/**
+ * Accumulates a response body delivered through HTTP event callbacks.
+ *
+ * esp_http_client_perform() reads (and discards) the whole response body itself
+ * and deliberately does not cache it, so calling esp_http_client_read_response()
+ * after perform() returns 0 bytes and the body is lost. The body is only
+ * available through the HTTP_EVENT_ON_DATA callback, so requests that need to
+ * parse a response must set an event handler and collect the data there.
+ *
+ * Pass a pointer to one of these as config.user_data; the handler retrieves it
+ * from evt->user_data.
+ */
+typedef struct{
+    char *buffer;       /** @brief Destination buffer, always NUL terminated */
+    int   size;         /** @brief Total capacity of <buffer> in bytes */
+    int   pos;          /** @brief Number of bytes collected so far */
+} HttpBodyCollector_t;
+
+static char _token_response[512];       /** @brief Body of the token endpoint response */
+static char _devices_response[4096];    /** @brief Body of the available devices response */
+
+#define HTTP_BODY_COLLECTOR_INIT(BUFFER) { .buffer = (BUFFER), .size = sizeof(BUFFER), .pos = 0 }
+
+
+static esp_err_t http_body_collector_handler(esp_http_client_event_t *evt)
+{
+    switch (evt->event_id)
+    {
+    case HTTP_EVENT_ON_DATA:{
+        HttpBodyCollector_t *collector = (HttpBodyCollector_t *)evt->user_data;
+        if(collector != NULL && evt->data != NULL && evt->data_len > 0){
+            if(collector->pos + evt->data_len < collector->size - 1){
+                memcpy(collector->buffer + collector->pos, evt->data, evt->data_len);
+                collector->pos += evt->data_len;
+                collector->buffer[collector->pos] = '\0';
+            }else{
+                ESP_LOGE(SPOTIFY_TAG, "Response body is bigger than the %d bytes buffer, it will be truncated", collector->size);
+            }
+        }
+        break;
+    }
+
+    case HTTP_EVENT_ON_HEADER:
+        ESP_LOGD(SPOTIFY_TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+        break;
+
+    case HTTP_EVENT_ERROR:
+        ESP_LOGE(SPOTIFY_TAG, "HTTP_EVENT_ERROR");
+        break;
+
+    case HTTP_EVENT_ON_FINISH:
+    case HTTP_EVENT_DISCONNECTED:
+        // Deliberately does not reset the collector: perform() dispatches these
+        // events before returning, and the caller reads the body afterwards.
+        break;
+
+    default:
+        break;
+    }
+
+    return ESP_OK;
+}
+
+
 SpotifyInfoBase_t* spotify_get_last_info_base(){ return _spotify_info_base;}
 SpotifyInfo_t* spotify_get_last_info(){ return _spotify_info;}
 
@@ -63,10 +127,16 @@ void IRAM_ATTR token_refresh_timer_cb(TimerHandle_t xTimer){
 
 void get_new_token(void *pvParam){
 
+    HttpBodyCollector_t collector = HTTP_BODY_COLLECTOR_INIT(_token_response);
+
     esp_http_client_config_t config = {
         .url = SPOTIFY_REQUEST_TOKEN_ENDPOINT,
         .method = HTTP_METHOD_POST,
-        //.event_handler = my_http_event_handler,
+        // The body has to be captured through the event handler, see
+        // HttpBodyCollector_t: esp_http_client_read_response() returns nothing
+        // once esp_http_client_perform() has drained the response.
+        .event_handler = http_body_collector_handler,
+        .user_data = &collector,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .buffer_size = 2048,
@@ -95,24 +165,23 @@ void get_new_token(void *pvParam){
 
             esp_http_client_set_post_field(client, post_data, written);
 
+            collector.pos = 0;
+            _token_response[0] = '\0';
+
             if(esp_http_client_perform(client) == ESP_OK){
 
-                esp_http_client_fetch_headers(client);
-                int cl = esp_http_client_get_content_length(client);
+                int status_code = esp_http_client_get_status_code(client);
 
-                if(cl > 0){
-                    char *response_data = malloc(1024);
-                    int eff_cl = esp_http_client_read_response(client, response_data, 1024);
-                    response_data[eff_cl] = 0;
+                if(collector.pos > 0){
 
-                    cJSON *root = cJSON_Parse(response_data);
-                    cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
-                    if(access_token != NULL){
+                    cJSON *root = cJSON_Parse(_token_response);
+                    cJSON *access_token = (root != NULL) ? cJSON_GetObjectItem(root, "access_token") : NULL;
+                    if(access_token != NULL && access_token->valuestring != NULL){
 
                         ESP_LOGI(SPOTIFY_TAG, "Token received");
 
                         //strcpy(_spotify_token, access_token->valuestring);
-                        
+
                         sprintf(_spotify_bearer_auth, SPOTIFY_AUTH_FIELD_BEARER_TEMPLATE, access_token->valuestring);
 
                         if(xQueueSend(xTokenQueue, access_token->valuestring, 0) != pdTRUE){
@@ -122,9 +191,30 @@ void get_new_token(void *pvParam){
                             // If success to send to queue, it means that the token is available
                             SPOTIFY_TOKEN_AVAILABLE = 1;
                         }
+                    }else{
+                        // The token endpoint returns an OAuth error object on failure,
+                        // e.g. {"error":"invalid_grant","error_description":"..."}.
+                        cJSON *error = (root != NULL) ? cJSON_GetObjectItem(root, "error") : NULL;
+                        if(error != NULL && error->valuestring != NULL){
+
+                            ESP_LOGE(SPOTIFY_TAG, "Token request failed (HTTP %d): %s", status_code, error->valuestring);
+                            ESP_LOGW(SPOTIFY_TAG, "Token response body: %s", _token_response);
+
+                            if(strcmp(error->valuestring, "invalid_grant") == 0){
+                                ESP_LOGE(SPOTIFY_TAG,
+                                    "REFRESH TOKEN EXPIRED OR REVOKED (tokens last 6 months). "
+                                    "Re-run tools/spotify_auth.py to re-authorize, then flash the new "
+                                    "token from include/my_credentials.h");
+                            }
+                        }else{
+                            ESP_LOGE(SPOTIFY_TAG, "Token request failed (HTTP %d): %s", status_code,
+                                (root == NULL) ? "unparseable response" : "no access_token in response");
+                            ESP_LOGW(SPOTIFY_TAG, "Token response body: %s", _token_response);
+                        }
                     }
-                    free(response_data);
                     cJSON_Delete(root);
+                }else{
+                    ESP_LOGE(SPOTIFY_TAG, "Token request returned an empty body (HTTP %d)", status_code);
                 }
             }
 
@@ -161,11 +251,11 @@ static esp_err_t spotify_playback_state_http_response_handler(esp_http_client_ev
     case HTTP_EVENT_ON_DATA:
         ESP_LOGD(SPOTIFY_TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
 
-        if(api_response_pos + evt->data_len < SPOTIFY_MAX_API_LEN){
+        if(evt->data != NULL && evt->data_len > 0 && api_response_pos + evt->data_len < SPOTIFY_MAX_API_LEN){
             memcpy(api_response + api_response_pos, evt->data, evt->data_len);
             api_response_pos += evt->data_len;
         }
-        
+
         break;
 
     case HTTP_EVENT_ON_FINISH:
@@ -252,7 +342,14 @@ void task_play_pause(void *pvParam){
     esp_http_client_set_header(client, SPOTIFY_AUTH_KEY, _spotify_bearer_auth);
 
     if(esp_http_client_perform(client) == ESP_OK){
-        //OK
+
+        int status_code = esp_http_client_get_status_code(client);
+        if(status_code == 204 || status_code == 200){
+            ESP_LOGI(SPOTIFY_TAG, "%s request accepted (HTTP %d)", (is_playing) ? "PAUSE" : "PLAY", status_code);
+        }else{
+            //403 and 404 usually mean there is no active playback device
+            ESP_LOGE(SPOTIFY_TAG, "%s request rejected (HTTP %d)", (is_playing) ? "PAUSE" : "PLAY", status_code);
+        }
     }else{
         ESP_LOGE(SPOTIFY_TAG, "Error asking for %s", (is_playing) ? "PAUSE" : "PLAY");
     }
@@ -397,7 +494,7 @@ void task_set_playback_volume(void *pvParam){
 
     free(url_request);
     esp_http_client_cleanup(client);
-    free(pvParam);      // The parameter passed was stored in memory through a calloc in order to be accessible inside this task. Free the memory it used
+    free(pvParam);      // The parameter was copied into a calloc block so the task could reach it. Release that block here.
 
     vTaskDelete(NULL);
 }
@@ -922,7 +1019,8 @@ void update_playback_state(void *pvParam){
     }
 
     int prev_is_playing = 0;
-    char prev_track_id[20]; //the ID is much shorter than 20, but allow for some overhead
+    //Spotify track ids are 22 chars long, this leaves plenty of room for them
+    char prev_track_id[64] = {0};
 
     for(;;){
 
@@ -935,6 +1033,8 @@ void update_playback_state(void *pvParam){
 
         esp_http_client_set_header(client, SPOTIFY_AUTH_KEY, _spotify_bearer_auth);
 
+        api_response_pos = 0;
+
         if(esp_http_client_perform(client) == ESP_OK){
 
             switch (_spotify_config.info_type){
@@ -944,7 +1044,7 @@ void update_playback_state(void *pvParam){
 
                     if( _spotify_config.on_song_change_cb != NULL && _spotify_info->item->id != NULL && strcmp(prev_track_id, _spotify_info->item->id) != 0){
                         _spotify_config.on_song_change_cb(_spotify_info);
-                        strcpy(prev_track_id, _spotify_info->item->id);
+                        snprintf(prev_track_id, sizeof(prev_track_id), "%s", _spotify_info->item->id);
                     }
 
                     if( _spotify_config.on_play_pause_change_cb != NULL && prev_is_playing != _spotify_info->is_playing){
@@ -959,9 +1059,9 @@ void update_playback_state(void *pvParam){
 
                     parse_playback_state_response_base(api_response);
 
-                    if(_spotify_config.on_song_change_base_cb != NULL && strcmp(prev_track_id, _spotify_info_base->song_id) != 0){
+                    if(_spotify_config.on_song_change_base_cb != NULL && _spotify_info_base->song_id != NULL && strcmp(prev_track_id, _spotify_info_base->song_id) != 0){
                         _spotify_config.on_song_change_base_cb(_spotify_info_base);
-                        strcpy(prev_track_id, _spotify_info_base->song_id);
+                        snprintf(prev_track_id, sizeof(prev_track_id), "%s", _spotify_info_base->song_id);
                     }
 
                     if(_spotify_config.on_play_pause_change_cb != NULL && prev_is_playing != _spotify_info_base->is_playing){
@@ -991,9 +1091,16 @@ void update_playback_state(void *pvParam){
 
 SpotifyAvailableDevices_t* spotify_get_available_devices(void){
 
+    HttpBodyCollector_t collector = HTTP_BODY_COLLECTOR_INIT(_devices_response);
+
     esp_http_client_config_t config = {
         .url = SPOTIFY_GET_API_URL(SPOTIFY_PLAYER_REFERENCE, SPOTIFY_AVAILABLE_DEVICES_ENDPOINT),
         .method = HTTP_METHOD_GET,
+        // See HttpBodyCollector_t: the body must be collected from the event
+        // handler, it is not available through esp_http_client_read_response()
+        // after esp_http_client_perform().
+        .event_handler = http_body_collector_handler,
+        .user_data = &collector,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .crt_bundle_attach = esp_crt_bundle_attach
     };
@@ -1004,19 +1111,16 @@ SpotifyAvailableDevices_t* spotify_get_available_devices(void){
 
     if(esp_http_client_perform(client) == ESP_OK){
 
-        int response_len = esp_http_client_get_content_length(client);
-        char *response = calloc(1, response_len);
-        if(response == NULL) {
-            ESP_LOGE(SPOTIFY_TAG, "Failed allocating memory for available devices response");
+        if(collector.pos <= 0) {
+            ESP_LOGE(SPOTIFY_TAG, "Empty response for available devices");
             esp_http_client_cleanup(client);
             return NULL;
         }
 
-        esp_http_client_read_response(client, response, response_len);
-
-        cJSON *root = cJSON_Parse(response);
+        cJSON *root = cJSON_Parse(_devices_response);
 
         if(root == NULL) {
+            ESP_LOGE(SPOTIFY_TAG, "Failed parsing the available devices response");
             esp_http_client_cleanup(client);
             return NULL;
         }
@@ -1065,7 +1169,6 @@ SpotifyAvailableDevices_t* spotify_get_available_devices(void){
                 if(volume_percent != NULL) _spotify_available_devices->available_devices[i]->volume_percent = volume_percent->valueint;
             }
         }
-        free(response);
         cJSON_Delete(root);
     }
 
@@ -1133,21 +1236,34 @@ void spotify_action_playback_to_device(char *device_id){
 }
 
 
-uint16_t img_offset = 0;
+static int _img_buff_size = 0;
+static int _img_bytes_received = 0;
+static uint8_t _img_overflow = 0;
+static uint32_t img_offset = 0;
+
 static esp_err_t spotify_image_http_response_handler(esp_http_client_event_t *evt){
     switch(evt->event_id){
         case HTTP_EVENT_ON_DATA:{
-            ESP_LOGI(SPOTIFY_TAG, "Received %d bytes of image", evt->data_len);
-            memcpy(evt->user_data + img_offset, evt->data, evt->data_len);
+
+            if(evt->data == NULL || evt->data_len <= 0){
+                break;
+            }
+
+            //Keep room for the null terminator and never write past the caller buffer
+            if(img_offset + evt->data_len >= _img_buff_size){
+                ESP_LOGE(SPOTIFY_TAG, "Image is bigger than the %d bytes buffer, download aborted", _img_buff_size);
+                _img_overflow = 1;
+                break;
+            }
+
+            memcpy((char *)evt->user_data + img_offset, evt->data, evt->data_len);
             img_offset += evt->data_len;
+            _img_bytes_received += evt->data_len;
             break;
         }
-        case HTTP_EVENT_ON_FINISH:{
-            // (char*)(evt->user_data)[img_offset] = '\0';
-            img_offset = 0;
-            break;
-        }
-        case HTTP_EVENT_DISCONNECTED:{
+        case HTTP_EVENT_ON_FINISH:
+        case HTTP_EVENT_DISCONNECTED:
+        case HTTP_EVENT_ERROR:{
             img_offset = 0;
             break;
         }
@@ -1158,6 +1274,11 @@ static esp_err_t spotify_image_http_response_handler(esp_http_client_event_t *ev
 }
 
 int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff_size){
+
+    if(url == NULL || img_buff == NULL || img_buff_size <= 0){
+        ESP_LOGE(SPOTIFY_TAG, "Invalid arguments to get the album cover art");
+        return ESP_FAIL;
+    }
 
     esp_http_client_config_t config = {
         .url = url,
@@ -1171,19 +1292,36 @@ int spotify_get_album_cover_art_from_url(char *url, char *img_buff, int img_buff
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    if(esp_http_client_perform(client) != ESP_OK) {esp_http_client_cleanup(client); return ESP_FAIL;}
+    //Reset the state of the handler: if a previous download was interrupted
+    //HTTP_EVENT_ON_FINISH is never emitted and img_offset is left stale
+    img_offset = 0;
+    _img_bytes_received = 0;
+    _img_overflow = 0;
+    _img_buff_size = img_buff_size;
 
-    int img_cl = esp_http_client_get_content_length(client);
-    if(img_cl > img_buff_size){
-        ESP_LOGE(SPOTIFY_TAG, "IMAGE BUFFER NOT BIG ENOUGHT FOR IMAGE, MUST BE AT LEAST %d bytes", img_cl);
+    if(esp_http_client_perform(client) != ESP_OK){
+        ESP_LOGE(SPOTIFY_TAG, "Failed performing the request for the album cover art");
         esp_http_client_cleanup(client);
         return ESP_FAIL;
     }
-    img_buff[img_cl] = '\0';
-    
-    ESP_LOGI(SPOTIFY_TAG, "Image size received is %d bytes", img_cl);
+
+    int img_cl = esp_http_client_get_content_length(client);
     esp_http_client_cleanup(client);
-    return img_cl;
+
+    if(_img_overflow){
+        ESP_LOGE(SPOTIFY_TAG, "IMAGE BUFFER NOT BIG ENOUGH FOR IMAGE, MUST BE AT LEAST %d bytes", img_cl);
+        return ESP_FAIL;
+    }
+
+    if(img_cl > 0 && img_cl != _img_bytes_received){
+        ESP_LOGE(SPOTIFY_TAG, "Truncated image received [%d/%d bytes]", _img_bytes_received, img_cl);
+        return ESP_FAIL;
+    }
+
+    img_buff[_img_bytes_received] = '\0';
+
+    ESP_LOGI(SPOTIFY_TAG, "Image size received is %d bytes", _img_bytes_received);
+    return _img_bytes_received;
 }
 
 int spotify_get_album_cover_art_latest(uint16_t size, char *img_buff, int img_buff_size){
