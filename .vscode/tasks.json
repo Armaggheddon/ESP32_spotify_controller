@@ -1,0 +1,35 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "PIO Build esp32dev",
+			"type": "shell",
+			"command": "C:\\Users\\alebr\\.platformio\\penv\\Scripts\\pio.exe",
+			"args": [
+				"run",
+				"-e",
+				"esp32dev"
+			],
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "PIO Upload esp32dev",
+			"type": "shell",
+			"command": "C:\\Users\\alebr\\.platformio\\penv\\Scripts\\pio.exe",
+			"args": [
+				"run",
+				"-e",
+				"esp32dev",
+				"-t",
+				"upload"
+			],
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		}
+	]
+}
